@@ -26,24 +26,20 @@ jobs:
         run: make repo-check
 
   apisix:
-    name: APISIX smoke test
+    name: Gateway and identity smoke tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Start APISIX and services
-        run: docker compose up -d --build
+      - name: Start local stack
+        run: make stack-up
 
-      - name: Test APISIX routes
+      - name: Test APISIX health
         run: make gateway-smoke
 
-      - name: Curl identity health routes
-        shell: bash
-        run: |
-          base_url="http://127.0.0.1:${APISIX_HTTP_PORT:-9080}"
-          curl --silent --show-error --fail --include "${base_url}/api/v1/identity/health/live"
-          curl --silent --show-error --fail --include "${base_url}/api/v1/identity/health/ready"
+      - name: Test identity health through APISIX
+        run: make identity-smoke
 
       - name: Print container logs on failure
         if: failure()
@@ -51,7 +47,7 @@ jobs:
 
       - name: Stop containers
         if: always()
-        run: make gateway-down
+        run: make stack-down
 
   go-services:
     name: Go services
@@ -79,6 +75,15 @@ jobs:
           go-version: '1.26.5'
           cache: false
 
+      - name: Verify identity module path
+        if: steps.modules.outputs.found == 'true'
+        working-directory: service/identity-service
+        shell: bash
+        run: |
+          module_path="$(go list -m)"
+          echo "${module_path}"
+          test "${module_path}" = "github.com/DoMinhHHung/bridgeworks/services/identity"
+
       - name: Install golangci-lint
         if: steps.modules.outputs.found == 'true'
         uses: golangci/golangci-lint-action@v9
@@ -97,18 +102,12 @@ jobs:
             service_dir="$(dirname "${module_file}")"
             echo "::group::${service_dir}"
 
-            unformatted="$(find "${service_dir}" -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
-            if [[ -n "${unformatted}" ]]; then
-              echo "Files require gofmt:"
-              echo "${unformatted}"
-              exit 1
-            fi
-
             (
               cd "${service_dir}"
+              test -z "$(gofmt -l .)"
               go mod tidy -diff
               go vet ./...
-              go test -race -coverprofile=coverage.out ./...
+              go test -race ./...
               golangci-lint run ./...
             )
 
