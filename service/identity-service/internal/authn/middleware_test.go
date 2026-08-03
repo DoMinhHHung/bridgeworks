@@ -74,13 +74,13 @@ func TestMiddlewareRejectsInvalidAuthentication(t *testing.T) {
 			signingKey: key,
 		},
 		{
-			name: "missing subject",
-			claims: claimsWithout(validClaims(now), "sub"),
+			name:       "missing subject",
+			claims:     claimsWithout(validClaims(now), "sub"),
 			signingKey: key,
 		},
 		{
-			name: "missing session ID",
-			claims: claimsWithout(validClaims(now), "sid"),
+			name:       "missing session ID",
+			claims:     claimsWithout(validClaims(now), "sid"),
 			signingKey: key,
 		},
 		{
