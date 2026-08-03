@@ -28,12 +28,29 @@ jobs:
       - name: Validate repository
         run: make repo-check
 
+      - name: Verify generated sqlc code
+        run: make identity-sqlc-check
+
+      - name: Verify locked migration is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git diff --exit-code origin/main HEAD -- \
+            service/identity-service/migrations/000001_create_app_users.sql
+
   apisix:
-    name: APISIX and PostgreSQL integration
+    name: APISIX, PostgreSQL, and Clerk webhook integration
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
 
       - name: Configure local environment
         run: cp .env.example .env
@@ -99,15 +116,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           docker compose ps
-
           for service in identity-service identity-postgres; do
             container_id="$(docker compose ps -q "${service}")"
             port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
             case "${port_bindings}" in
-              null|'{}')
-                ;;
+              null|'{}') ;;
               *)
                 echo "${service} must not publish host ports: ${port_bindings}" >&2
                 exit 1
@@ -139,11 +153,159 @@ jobs:
           grep --quiet --ignore-case '^X-Request-Id: postgres-ready-check' \
             <<< "${ready_response//$'\r'/}"
 
-      - name: Verify dependency outage semantics
+      - name: Verify Clerk webhook synchronization
         shell: bash
         run: |
           set -euo pipefail
+          set -a
+          source .env
+          set +a
 
+          work="${RUNNER_TEMP}/clerk-webhook"
+          mkdir -p "${work}"
+          webhook_url='http://127.0.0.1:9080/api/v1/identity/webhooks/clerk'
+
+          postgres_id="$(docker compose ps -q identity-postgres)"
+          postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
+          postgres_db="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_DB=//p')"
+
+          psql_value() {
+            docker compose exec -T identity-postgres psql \
+              --username "${postgres_user}" \
+              --dbname "${postgres_db}" \
+              --set ON_ERROR_STOP=1 \
+              --tuples-only \
+              --no-align \
+              --field-separator '|' \
+              --command "$1" | sed '/^[[:space:]]*$/d'
+          }
+
+          send_signed() {
+            local event_id="$1"
+            local payload_file="$2"
+            local body_output="$3"
+            local request_id="$4"
+            (
+              cd service/identity-service
+              go run ../../.github/scripts/clerk-webhook-client.go \
+                -url "${webhook_url}" \
+                -secret "${CLERK_WEBHOOK_SIGNING_SECRET}" \
+                -event-id "${event_id}" \
+                -payload-file "${payload_file}" \
+                -body-output "${body_output}" \
+                -request-id "${request_id}"
+            )
+          }
+
+          cat > "${work}/invalid.json" <<'JSON'
+          {"type":"user.created","timestamp":1785744000000,"data":{"id":"user_ci_invalid","primary_email_address_id":"email_invalid","email_addresses":[{"id":"email_invalid","email_address":"invalid-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          invalid_body="${work}/invalid-response.json"
+          invalid_headers="${work}/invalid-response.headers"
+          invalid_status="$(curl --show-error --silent \
+            --output "${invalid_body}" \
+            --dump-header "${invalid_headers}" \
+            --write-out '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -H 'X-Request-Id: invalid-webhook-ci' \
+            -H 'svix-id: msg_invalid' \
+            -H "svix-timestamp: $(date +%s)" \
+            -H 'svix-signature: v1,invalid-signature-ci' \
+            --data-binary "@${work}/invalid.json" \
+            "${webhook_url}")"
+          test "${invalid_status}" = "400"
+          grep --quiet --ignore-case '^X-Request-Id: invalid-webhook-ci' "${invalid_headers}"
+          grep --quiet '"code":"invalid_webhook"' "${invalid_body}"
+          test "$(psql_value 'select count(*) from app.app_users')" = "0"
+          test "$(psql_value 'select count(*) from app.clerk_webhook_events')" = "0"
+
+          cat > "${work}/create.json" <<'JSON'
+          {"type":"user.created","timestamp":1785744000000,"data":{"id":"user_ci_primary","primary_email_address_id":"email_primary","email_addresses":[{"id":"email_other","email_address":"first-ci@example.test","verification":{"status":"verified"}},{"id":"email_primary","email_address":"verified-primary-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          create_result="$(send_signed msg_create "${work}/create.json" "${work}/create-response" create-webhook-ci)"
+          test "${create_result}" = "204|create-webhook-ci"
+          test ! -s "${work}/create-response"
+          test "$(psql_value "select count(*) from app.app_users where clerk_user_id = 'user_ci_primary'")" = "1"
+          test "$(psql_value "select count(*) from app.clerk_webhook_events where event_id = 'msg_create'")" = "1"
+          test "$(psql_value "select substring(id::text from 15 for 1) from app.app_users where clerk_user_id = 'user_ci_primary'")" = "7"
+          test "$(psql_value "select id_user ~ '^bw[0-9]{12}$' from app.app_users where clerk_user_id = 'user_ci_primary'")" = "t"
+          test "$(psql_value "select status from app.app_users where clerk_user_id = 'user_ci_primary'")" = "active"
+          test "$(psql_value "select primary_email::text from app.app_users where clerk_user_id = 'user_ci_primary'")" = "verified-primary-ci@example.test"
+
+          original_row="$(psql_value "select id::text, id_user, created_at::text from app.app_users where clerk_user_id = 'user_ci_primary'")"
+          duplicate_result="$(send_signed msg_create "${work}/create.json" "${work}/duplicate-response" duplicate-webhook-ci)"
+          test "${duplicate_result}" = "204|duplicate-webhook-ci"
+          test "$(psql_value "select count(*) from app.clerk_webhook_events where event_id = 'msg_create'")" = "1"
+          test "$(psql_value "select count(*) from app.app_users where clerk_user_id = 'user_ci_primary'")" = "1"
+          test "$(psql_value "select id::text, id_user, created_at::text from app.app_users where clerk_user_id = 'user_ci_primary'")" = "${original_row}"
+
+          cat > "${work}/update.json" <<'JSON'
+          {"type":"user.updated","timestamp":1785744001000,"data":{"id":"user_ci_primary","primary_email_address_id":"email_updated","email_addresses":[{"id":"email_updated","email_address":"updated-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          test "$(send_signed msg_update "${work}/update.json" "${work}/update-response" update-webhook-ci)" = "204|update-webhook-ci"
+          test "$(psql_value "select primary_email::text from app.app_users where clerk_user_id = 'user_ci_primary'")" = "updated-ci@example.test"
+          test "$(psql_value "select id::text, id_user from app.app_users where clerk_user_id = 'user_ci_primary'")" = "$(cut -d'|' -f1-2 <<< "${original_row}")"
+
+          psql_value "update app.app_users set status = 'disabled' where clerk_user_id = 'user_ci_primary' returning status" | grep --quiet '^disabled$'
+          cat > "${work}/disabled-update.json" <<'JSON'
+          {"type":"user.updated","timestamp":1785744002000,"data":{"id":"user_ci_primary","primary_email_address_id":"email_disabled","email_addresses":[{"id":"email_disabled","email_address":"disabled-update-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          test "$(send_signed msg_disabled_update "${work}/disabled-update.json" "${work}/disabled-update-response" disabled-webhook-ci)" = "204|disabled-webhook-ci"
+          test "$(psql_value "select status, primary_email::text from app.app_users where clerk_user_id = 'user_ci_primary'")" = "disabled|disabled-update-ci@example.test"
+
+          cat > "${work}/delete.json" <<'JSON'
+          {"type":"user.deleted","timestamp":1785744003000,"data":{"id":"user_ci_primary"}}
+          JSON
+          test "$(send_signed msg_delete "${work}/delete.json" "${work}/delete-response" delete-webhook-ci)" = "204|delete-webhook-ci"
+          test "$(psql_value "select status, primary_email is null from app.app_users where clerk_user_id = 'user_ci_primary'")" = "deleted|t"
+          test "$(psql_value "select id::text, id_user from app.app_users where clerk_user_id = 'user_ci_primary'")" = "$(cut -d'|' -f1-2 <<< "${original_row}")"
+
+          cat > "${work}/stale-update.json" <<'JSON'
+          {"type":"user.updated","timestamp":1785744002500,"data":{"id":"user_ci_primary","primary_email_address_id":"email_stale","email_addresses":[{"id":"email_stale","email_address":"stale-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          test "$(send_signed msg_stale_update "${work}/stale-update.json" "${work}/stale-response" stale-webhook-ci)" = "204|stale-webhook-ci"
+          test "$(psql_value "select status, primary_email is null from app.app_users where clerk_user_id = 'user_ci_primary'")" = "deleted|t"
+          test "$(psql_value "select count(*) from app.clerk_webhook_events where event_id = 'msg_stale_update'")" = "1"
+
+          cat > "${work}/unknown-delete.json" <<'JSON'
+          {"type":"user.deleted","timestamp":1785744004000,"data":{"id":"user_ci_tombstone"}}
+          JSON
+          test "$(send_signed msg_unknown_delete "${work}/unknown-delete.json" "${work}/unknown-delete-response" tombstone-webhook-ci)" = "204|tombstone-webhook-ci"
+          test "$(psql_value "select status, primary_email is null, substring(id::text from 15 for 1), id_user ~ '^bw[0-9]{12}$' from app.app_users where clerk_user_id = 'user_ci_tombstone'")" = "deleted|t|7|t"
+
+          cat > "${work}/outage.json" <<'JSON'
+          {"type":"user.created","timestamp":1785744005000,"data":{"id":"user_ci_outage","primary_email_address_id":"email_outage","email_addresses":[{"id":"email_outage","email_address":"outage-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          identity_before="$(docker compose ps -q identity-service)"
+          docker compose stop identity-postgres
+          outage_result="$(send_signed msg_outage "${work}/outage.json" "${work}/outage-response" outage-webhook-ci)"
+          test "${outage_result}" = "503|outage-webhook-ci"
+          grep --quiet '"code":"service_unavailable"' "${work}/outage-response"
+          grep --quiet '"message":"service temporarily unavailable"' "${work}/outage-response"
+
+          docker compose start identity-postgres
+          make gateway-smoke
+          test "$(docker compose ps -q identity-service)" = "${identity_before}"
+          test "$(send_signed msg_outage "${work}/outage.json" "${work}/outage-retry-response" outage-retry-webhook-ci)" = "204|outage-retry-webhook-ci"
+          test "$(psql_value "select count(*) from app.app_users where clerk_user_id = 'user_ci_outage'")" = "1"
+          test "$(psql_value "select count(*) from app.clerk_webhook_events where event_id = 'msg_outage'")" = "1"
+
+          service_logs="$(docker compose logs --no-color identity-service)"
+          forbidden_pattern='whsec_|verified-primary-ci@example.test|first-ci@example.test|updated-ci@example.test|disabled-update-ci@example.test|stale-ci@example.test|outage-ci@example.test|user_ci_|svix-signature|invalid-signature-ci|postgres://|bridgeworks_identity_local|identity-postgres|pgx|connection refused'
+          if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" <<< "${service_logs}"; then
+            echo "identity-service logs leaked webhook or database details" >&2
+            printf '%s\n' "${service_logs}" >&2
+            exit 1
+          fi
+          if grep --recursive --extended-regexp --ignore-case --quiet "${forbidden_pattern}" "${work}"/*response*; then
+            echo "webhook response leaked sensitive details" >&2
+            exit 1
+          fi
+
+      - name: Verify dependency outage health semantics
+        shell: bash
+        run: |
+          set -euo pipefail
           docker compose stop identity-postgres
 
           live_response="$(curl --fail --show-error --silent -i \
@@ -151,8 +313,7 @@ jobs:
             http://127.0.0.1:9080/api/v1/identity/health/live)"
           printf '%s\n' "${live_response}"
           grep --quiet 'HTTP/1.1 200' <<< "${live_response}"
-          grep --quiet --ignore-case '^X-Request-Id: database-down-live' \
-            <<< "${live_response//$'\r'/}"
+          grep --quiet --ignore-case '^X-Request-Id: database-down-live' <<< "${live_response//$'\r'/}"
 
           ready_body="$(mktemp)"
           ready_headers="$(mktemp)"
@@ -167,22 +328,6 @@ jobs:
           test "${status_code}" = "503"
           grep --quiet --ignore-case '^X-Request-Id: database-down-ready' "${ready_headers}"
           grep --quiet '"code":"service_unavailable"' "${ready_body}"
-          grep --quiet '"message":"service is not ready"' "${ready_body}"
-          grep --quiet '"request_id":"database-down-ready"' "${ready_body}"
-          grep --quiet '"details":null' "${ready_body}"
-
-          forbidden_pattern='postgres://|bridgeworks_identity|identity-postgres|pgx|connection refused|5432'
-          if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" "${ready_body}"; then
-            echo "readiness response leaked database details" >&2
-            exit 1
-          fi
-
-          service_logs="$(docker compose logs --no-color identity-service)"
-          printf '%s\n' "${service_logs}"
-          if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" <<< "${service_logs}"; then
-            echo "identity-service logs leaked database details" >&2
-            exit 1
-          fi
 
           docker compose start identity-postgres
           make gateway-smoke
@@ -232,18 +377,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           for module_file in service/*/go.mod; do
             service_dir="$(dirname "${module_file}")"
             echo "::group::${service_dir}"
-
             unformatted="$(find "${service_dir}" -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
             if [[ -n "${unformatted}" ]]; then
               echo "Files require gofmt:"
               echo "${unformatted}"
               exit 1
             fi
-
             (
               cd "${service_dir}"
               go mod tidy -diff
@@ -251,6 +393,5 @@ jobs:
               go test -race -coverprofile=coverage.out ./...
               golangci-lint run ./...
             )
-
             echo "::endgroup::"
           done

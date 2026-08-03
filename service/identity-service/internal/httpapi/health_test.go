@@ -78,13 +78,19 @@ func TestReadinessTimeoutReturnsServiceUnavailable(t *testing.T) {
 	t.Parallel()
 
 	router := NewRouter(
-		"identity-service",
+		RouterConfig{
+			ServiceName:                "identity-service",
+			ReadinessTimeout:           10 * time.Millisecond,
+			ClerkWebhookProcessTimeout: time.Second,
+			ClerkWebhookMaxBodyBytes:   1 << 20,
+		},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		readinessCheckerFunc(func(ctx context.Context) error {
 			<-ctx.Done()
 			return ctx.Err()
 		}),
-		10*time.Millisecond,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
@@ -124,10 +130,16 @@ func TestUnknownRouteUsesErrorEnvelope(t *testing.T) {
 
 func newTestRouter(checker ReadinessChecker) http.Handler {
 	return NewRouter(
-		"identity-service",
+		RouterConfig{
+			ServiceName:                "identity-service",
+			ReadinessTimeout:           time.Second,
+			ClerkWebhookProcessTimeout: time.Second,
+			ClerkWebhookMaxBodyBytes:   1 << 20,
+		},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		checker,
-		time.Second,
+		nil,
+		nil,
 	)
 }
 
