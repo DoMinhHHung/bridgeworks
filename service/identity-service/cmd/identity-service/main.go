@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/authn"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/clerkwebhook"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/config"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/currentuser"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/httpapi"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/identityid"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform"
@@ -58,15 +60,31 @@ func run(bootstrapLogger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	authenticate, err := authn.New(
+		authn.Config{
+			JWTKey:            cfg.ClerkJWTKey,
+			Issuer:            cfg.ClerkIssuer,
+			AuthorizedParties: cfg.ClerkAuthorizedParties,
+			Leeway:            cfg.ClerkAuthLeeway,
+		},
+		logger,
+		httpapi.RequestIDFromContext,
+	)
+	if err != nil {
+		return err
+	}
+
 	idUserGenerator, err := identityid.New(time.Now, nil)
 	if err != nil {
 		return fmt.Errorf("initialize id_user generator: %w", err)
 	}
+	identityRepository := store.New(database)
 	userSynchronizer := usersync.New(
-		store.New(database),
+		identityRepository,
 		identityid.UUIDV7Generator{},
 		idUserGenerator,
 	)
+	currentUserService := currentuser.New(identityRepository)
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -81,6 +99,8 @@ func run(bootstrapLogger *slog.Logger) error {
 			database,
 			verifier,
 			userSynchronizer,
+			authenticate,
+			currentUserService,
 		),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
