@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,7 +34,10 @@ func run(bootstrapLogger *slog.Logger) error {
 	logger := platform.NewLogger(os.Stdout, cfg.LogLevel).With("service", cfg.ServiceName)
 	slog.SetDefault(logger)
 
-	database, err := postgres.Open(context.Background(), postgres.Config{
+	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	database, err := postgres.Open(signalContext, postgres.Config{
 		URL:               cfg.DatabaseURL,
 		ConnectTimeout:    cfg.DatabaseConnectTimeout,
 		MaxConns:          cfg.DatabaseMaxConns,
@@ -62,9 +66,6 @@ func run(bootstrapLogger *slog.Logger) error {
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
-	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	serveErrors := make(chan error, 1)
 	go func() {
 		logger.Info("http server starting", "address", cfg.HTTPAddr)
@@ -76,7 +77,7 @@ func run(bootstrapLogger *slog.Logger) error {
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			return nil
 		}
-		return serveErr
+		return fmt.Errorf("serve HTTP: %w", serveErr)
 	case <-signalContext.Done():
 		logger.Info("shutdown signal received")
 	}
@@ -86,13 +87,13 @@ func run(bootstrapLogger *slog.Logger) error {
 
 	if err := server.Shutdown(shutdownContext); err != nil {
 		_ = server.Close()
-		return errors.New("shutdown HTTP server")
+		return fmt.Errorf("shutdown HTTP server: %w", err)
 	}
 
 	select {
 	case serveErr := <-serveErrors:
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			return serveErr
+			return fmt.Errorf("serve HTTP during shutdown: %w", serveErr)
 		}
 	case <-time.After(cfg.ShutdownTimeout):
 		return errors.New("http server did not stop before shutdown timeout")
