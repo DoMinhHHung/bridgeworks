@@ -10,8 +10,8 @@ import (
 
 var (
 	ErrIdentityNotReady = errors.New("identity synchronization is not complete")
-	ErrAccountDisabled = errors.New("account is disabled")
-	ErrAccountDeleted  = errors.New("account is deleted")
+	ErrAccountDisabled  = errors.New("account is disabled")
+	ErrAccountDeleted   = errors.New("account is deleted")
 )
 
 type User struct {
