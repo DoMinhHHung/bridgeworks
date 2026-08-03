@@ -19,13 +19,13 @@ const migrationTableName = "app.goose_db_version"
 
 func main() {
 	bootstrapLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(context.Background(), os.Args[1:], bootstrapLogger); err != nil {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		bootstrapLogger.Error("identity migration failed", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(parent context.Context, args []string, bootstrapLogger *slog.Logger) error {
+func run(parent context.Context, args []string) error {
 	command, err := parseCommand(args)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func run(parent context.Context, args []string, bootstrapLogger *slog.Logger) er
 				"identity migration status",
 				"version", status.Source.Version,
 				"path", status.Source.Path,
-				"state", status.State.String(),
+				"state", string(status.State),
 				"applied_at", status.AppliedAt,
 			)
 		}
