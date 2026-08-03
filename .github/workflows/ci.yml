@@ -40,7 +40,7 @@ jobs:
             service/identity-service/migrations/000001_create_app_users.sql
 
   apisix:
-    name: APISIX, PostgreSQL, and Clerk webhook integration
+    name: APISIX, PostgreSQL, Clerk webhook, and session auth integration
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -52,8 +52,31 @@ jobs:
           go-version: '1.26.5'
           cache: false
 
-      - name: Configure local environment
-        run: cp .env.example .env
+      - name: Configure local environment and ephemeral Clerk keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+
+          auth_work="${RUNNER_TEMP}/clerk-auth"
+          mkdir -p "${auth_work}"
+          (
+            cd service/identity-service
+            go run ../../.github/scripts/clerk-session-token.go \
+              -action generate \
+              -private-key "${auth_work}/private.pem" \
+              -public-key "${auth_work}/public.key"
+            go run ../../.github/scripts/clerk-session-token.go \
+              -action generate \
+              -private-key "${auth_work}/invalid-private.pem" \
+              -public-key "${auth_work}/invalid-public.key"
+          )
+          public_key="$(cat "${auth_work}/public.key")"
+          test -n "${public_key}"
+          sed -i "s|^CLERK_JWT_KEY=.*$|CLERK_JWT_KEY=${public_key}|" .env
+          grep --quiet '^CLERK_JWT_KEY=' .env
+          test ! -e service/identity-service/private.pem
+          test ! -e service/identity-service/invalid-private.pem
 
       - name: Verify gateway independently
         run: |
@@ -301,6 +324,253 @@ jobs:
             echo "webhook response leaked sensitive details" >&2
             exit 1
           fi
+
+      - name: Verify authenticated current user
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+
+          auth_work="${RUNNER_TEMP}/clerk-auth"
+          response_work="${auth_work}/responses"
+          mkdir -p "${response_work}"
+          me_url='http://127.0.0.1:9080/api/v1/me'
+          webhook_url='http://127.0.0.1:9080/api/v1/identity/webhooks/clerk'
+          authorized_party="${CLERK_AUTHORIZED_PARTIES%%,*}"
+
+          postgres_id="$(docker compose ps -q identity-postgres)"
+          postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
+          postgres_db="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_DB=//p')"
+
+          psql_value() {
+            docker compose exec -T identity-postgres psql \
+              --username "${postgres_user}" \
+              --dbname "${postgres_db}" \
+              --set ON_ERROR_STOP=1 \
+              --tuples-only \
+              --no-align \
+              --field-separator '|' \
+              --command "$1" | sed '/^[[:space:]]*$/d'
+          }
+
+          sign_token() {
+            local private_key="$1"
+            local issuer="$2"
+            local subject="$3"
+            local session_id="$4"
+            local party="$5"
+            local output="$6"
+            (
+              cd service/identity-service
+              go run ../../.github/scripts/clerk-session-token.go \
+                -action sign \
+                -private-key "${private_key}" \
+                -issuer "${issuer}" \
+                -subject "${subject}" \
+                -session-id "${session_id}" \
+                -authorized-party "${party}" \
+                -output "${output}"
+            )
+          }
+
+          request_me() {
+            local token_file="$1"
+            local request_id="$2"
+            local body_file="$3"
+            local header_file="$4"
+            if [[ -n "${token_file}" ]]; then
+              curl --show-error --silent \
+                --output "${body_file}" \
+                --dump-header "${header_file}" \
+                --write-out '%{http_code}' \
+                -H "Authorization: Bearer $(cat "${token_file}")" \
+                -H "X-Request-Id: ${request_id}" \
+                "${me_url}"
+            else
+              curl --show-error --silent \
+                --output "${body_file}" \
+                --dump-header "${header_file}" \
+                --write-out '%{http_code}' \
+                -H "X-Request-Id: ${request_id}" \
+                "${me_url}"
+            fi
+          }
+
+          assert_error() {
+            local body_file="$1"
+            local header_file="$2"
+            local request_id="$3"
+            local code="$4"
+            local message="$5"
+            grep --quiet --ignore-case "^X-Request-Id: ${request_id}" "${header_file}"
+            grep --quiet "\"code\":\"${code}\"" "${body_file}"
+            grep --quiet "\"message\":\"${message}\"" "${body_file}"
+            grep --quiet "\"request_id\":\"${request_id}\"" "${body_file}"
+            grep --quiet '"details":null' "${body_file}"
+          }
+
+          cat > "${auth_work}/me-create.json" <<'JSON'
+          {"type":"user.created","timestamp":1785744010000,"data":{"id":"user_ci_me_active","primary_email_address_id":"email_me","email_addresses":[{"id":"email_me","email_address":"me-auth-ci@example.test","verification":{"status":"verified"}}]}}
+          JSON
+          me_webhook_result="$(
+            cd service/identity-service
+            go run ../../.github/scripts/clerk-webhook-client.go \
+              -url "${webhook_url}" \
+              -secret "${CLERK_WEBHOOK_SIGNING_SECRET}" \
+              -event-id msg_me_create \
+              -payload-file "${auth_work}/me-create.json" \
+              -body-output "${auth_work}/me-create-response" \
+              -request-id me-create-webhook-ci
+          )"
+          test "${me_webhook_result}" = "204|me-create-webhook-ci"
+          test "$(psql_value "select status from app.app_users where clerk_user_id = 'user_ci_me_active'")" = "active"
+
+          sign_token "${auth_work}/private.pem" "${CLERK_ISSUER}" user_ci_me_active sess_ci_me_active "${authorized_party}" "${auth_work}/valid.token"
+          sign_token "${auth_work}/invalid-private.pem" "${CLERK_ISSUER}" user_ci_me_active sess_ci_me_invalid_signature "${authorized_party}" "${auth_work}/invalid-signature.token"
+          sign_token "${auth_work}/private.pem" https://wrong-issuer.example user_ci_me_active sess_ci_me_wrong_issuer "${authorized_party}" "${auth_work}/wrong-issuer.token"
+          sign_token "${auth_work}/private.pem" "${CLERK_ISSUER}" user_ci_me_active sess_ci_me_wrong_party https://wrong-party.example "${auth_work}/wrong-party.token"
+          sign_token "${auth_work}/private.pem" "${CLERK_ISSUER}" user_ci_me_missing sess_ci_me_missing "${authorized_party}" "${auth_work}/missing-user.token"
+          sign_token "${auth_work}/private.pem" "${CLERK_ISSUER}" user_ci_outage sess_ci_me_recovery "${authorized_party}" "${auth_work}/recovery.token"
+
+          missing_status="$(request_me '' me-missing-token "${response_work}/missing-body.json" "${response_work}/missing-headers")"
+          test "${missing_status}" = "401"
+          assert_error "${response_work}/missing-body.json" "${response_work}/missing-headers" me-missing-token unauthorized 'authentication required'
+
+          invalid_status="$(request_me "${auth_work}/invalid-signature.token" me-invalid-signature "${response_work}/invalid-signature-body.json" "${response_work}/invalid-signature-headers")"
+          test "${invalid_status}" = "401"
+          assert_error "${response_work}/invalid-signature-body.json" "${response_work}/invalid-signature-headers" me-invalid-signature unauthorized 'authentication required'
+
+          wrong_issuer_status="$(request_me "${auth_work}/wrong-issuer.token" me-wrong-issuer "${response_work}/wrong-issuer-body.json" "${response_work}/wrong-issuer-headers")"
+          test "${wrong_issuer_status}" = "401"
+          assert_error "${response_work}/wrong-issuer-body.json" "${response_work}/wrong-issuer-headers" me-wrong-issuer unauthorized 'authentication required'
+
+          wrong_party_status="$(request_me "${auth_work}/wrong-party.token" me-wrong-party "${response_work}/wrong-party-body.json" "${response_work}/wrong-party-headers")"
+          test "${wrong_party_status}" = "401"
+          assert_error "${response_work}/wrong-party-body.json" "${response_work}/wrong-party-headers" me-wrong-party unauthorized 'authentication required'
+
+          active_before="$(psql_value "select id::text, id_user, primary_email::text, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")"
+          active_count_before="$(psql_value "select count(*) from app.app_users")"
+          active_status="$(request_me "${auth_work}/valid.token" me-active "${response_work}/active-body.json" "${response_work}/active-headers")"
+          test "${active_status}" = "200"
+          grep --quiet --ignore-case '^X-Request-Id: me-active' "${response_work}/active-headers"
+          test "$(psql_value "select id::text, id_user, primary_email::text, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")" = "${active_before}"
+          test "$(psql_value "select count(*) from app.app_users")" = "${active_count_before}"
+          IFS='|' read -r expected_id expected_id_user expected_email expected_status _ <<< "${active_before}"
+          python3 - "${response_work}/active-body.json" "${expected_id}" "${expected_id_user}" "${expected_email}" "${expected_status}" <<'PY'
+          import datetime
+          import json
+          import sys
+
+          body_path, expected_id, expected_id_user, expected_email, expected_status = sys.argv[1:]
+          with open(body_path, encoding="utf-8") as source:
+              body = json.load(source)
+          assert set(body) == {"id", "id_user", "primary_email", "status", "created_at", "updated_at"}
+          assert body["id"] == expected_id
+          assert body["id_user"] == expected_id_user
+          assert body["primary_email"] == expected_email
+          assert body["status"] == expected_status == "active"
+          assert "clerk_user_id" not in body
+          for field in ("created_at", "updated_at"):
+              value = body[field]
+              assert value.endswith("Z")
+              datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+          PY
+
+          psql_value "update app.app_users set status = 'disabled' where clerk_user_id = 'user_ci_me_active' returning status" | grep --quiet '^disabled$'
+          disabled_before="$(psql_value "select id::text, id_user, primary_email::text, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")"
+          disabled_status="$(request_me "${auth_work}/valid.token" me-disabled "${response_work}/disabled-body.json" "${response_work}/disabled-headers")"
+          test "${disabled_status}" = "403"
+          assert_error "${response_work}/disabled-body.json" "${response_work}/disabled-headers" me-disabled account_disabled 'account is disabled'
+          test "$(psql_value "select id::text, id_user, primary_email::text, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")" = "${disabled_before}"
+
+          psql_value "update app.app_users set status = 'deleted', primary_email = null where clerk_user_id = 'user_ci_me_active' returning status" | grep --quiet '^deleted$'
+          deleted_before="$(psql_value "select id::text, id_user, primary_email is null, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")"
+          deleted_status="$(request_me "${auth_work}/valid.token" me-deleted "${response_work}/deleted-body.json" "${response_work}/deleted-headers")"
+          test "${deleted_status}" = "403"
+          assert_error "${response_work}/deleted-body.json" "${response_work}/deleted-headers" me-deleted account_deleted 'account is deleted'
+          test "$(psql_value "select id::text, id_user, primary_email is null, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")" = "${deleted_before}"
+
+          test "$(psql_value "select count(*) from app.app_users where clerk_user_id = 'user_ci_me_missing'")" = "0"
+          identity_not_ready_status="$(request_me "${auth_work}/missing-user.token" me-identity-not-ready "${response_work}/identity-not-ready-body.json" "${response_work}/identity-not-ready-headers")"
+          test "${identity_not_ready_status}" = "409"
+          assert_error "${response_work}/identity-not-ready-body.json" "${response_work}/identity-not-ready-headers" me-identity-not-ready identity_not_ready 'identity synchronization is not complete'
+          grep --quiet --ignore-case '^Retry-After: 2' "${response_work}/identity-not-ready-headers"
+          test "$(psql_value "select count(*) from app.app_users where clerk_user_id = 'user_ci_me_missing'")" = "0"
+
+          identity_before="$(docker compose ps -q identity-service)"
+          docker compose stop identity-postgres
+          outage_status="$(request_me "${auth_work}/recovery.token" me-database-outage "${response_work}/outage-body.json" "${response_work}/outage-headers")"
+          test "${outage_status}" = "503"
+          assert_error "${response_work}/outage-body.json" "${response_work}/outage-headers" me-database-outage service_unavailable 'service temporarily unavailable'
+
+          docker compose start identity-postgres
+          make gateway-smoke
+          test "$(docker compose ps -q identity-service)" = "${identity_before}"
+          recovery_status="$(request_me "${auth_work}/recovery.token" me-database-recovery "${response_work}/recovery-body.json" "${response_work}/recovery-headers")"
+          test "${recovery_status}" = "200"
+          grep --quiet --ignore-case '^X-Request-Id: me-database-recovery' "${response_work}/recovery-headers"
+          grep --quiet '"primary_email":"outage-ci@example.test"' "${response_work}/recovery-body.json"
+
+          docker compose logs --no-color identity-service > "${auth_work}/identity-service.log"
+          python3 - "${auth_work}" "${response_work}" "${DATABASE_URL}" "${IDENTITY_POSTGRES_PASSWORD}" <<'PY'
+          import pathlib
+          import sys
+
+          auth_work = pathlib.Path(sys.argv[1])
+          response_work = pathlib.Path(sys.argv[2])
+          database_url = sys.argv[3]
+          database_password = sys.argv[4]
+
+          tokens = [path.read_text(encoding="utf-8") for path in auth_work.glob("*.token")]
+          private_keys = [
+              (auth_work / "private.pem").read_text(encoding="utf-8"),
+              (auth_work / "invalid-private.pem").read_text(encoding="utf-8"),
+          ]
+          public_keys = [
+              (auth_work / "public.key").read_text(encoding="utf-8"),
+              (auth_work / "invalid-public.key").read_text(encoding="utf-8"),
+          ]
+          identifiers = [
+              "user_ci_me_active",
+              "user_ci_me_missing",
+              "user_ci_outage",
+              "sess_ci_me_active",
+              "sess_ci_me_invalid_signature",
+              "sess_ci_me_wrong_issuer",
+              "sess_ci_me_wrong_party",
+              "sess_ci_me_missing",
+              "sess_ci_me_recovery",
+          ]
+          emails = ["me-auth-ci@example.test", "outage-ci@example.test"]
+          fragments = [
+              database_url,
+              database_password,
+              "postgres://",
+              "identity-postgres",
+              "pgx",
+              "connection refused",
+              "invalid issuer",
+              "invalid authorized party",
+              "crypto/rsa",
+              "BEGIN PRIVATE KEY",
+          ]
+          forbidden = [value for value in tokens + private_keys + public_keys + identifiers + emails + fragments if value]
+
+          logs = (auth_work / "identity-service.log").read_text(encoding="utf-8")
+          for value in forbidden:
+              assert value not in logs, f"identity-service log leaked forbidden value: {value[:32]!r}"
+
+          success_files = {"active-body.json", "recovery-body.json"}
+          for path in response_work.glob("*-body.json"):
+              body = path.read_text(encoding="utf-8")
+              values = forbidden
+              if path.name in success_files:
+                  values = [value for value in forbidden if value not in emails]
+              for value in values:
+                  assert value not in body, f"{path.name} leaked forbidden value: {value[:32]!r}"
+          PY
 
       - name: Verify dependency outage health semantics
         shell: bash
