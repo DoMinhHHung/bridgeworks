@@ -1,6 +1,9 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: repo-check gateway-up gateway-down gateway-restart gateway-logs stack-up stack-down stack-restart stack-logs gateway-smoke identity-migrate-up identity-migrate-status identity-migrate-version identity-db-logs identity-db-shell ci
+SQLC_IMAGE := sqlc/sqlc:1.31.1
+IDENTITY_SQLC_GENERATED := service/identity-service/internal/store/sqlcgen
+
+.PHONY: repo-check gateway-up gateway-down gateway-restart gateway-logs stack-up stack-down stack-restart stack-logs gateway-smoke identity-migrate-up identity-migrate-status identity-migrate-version identity-db-logs identity-db-shell identity-sqlc-generate identity-sqlc-check ci
 
 repo-check:
 	@test -f compose.yaml
@@ -11,6 +14,7 @@ repo-check:
 	@test -f service/identity-service/Dockerfile
 	@test -f service/identity-service/cmd/identity-migrate/main.go
 	@test -f service/identity-service/migrations/000001_create_app_users.sql
+	@test -f service/identity-service/sqlc.yaml
 	@test "$$(tail -n 1 gateway/apisix/conf/apisix.yaml)" = "#END"
 	@docker compose --env-file .env.example config --quiet
 	@if [[ -f .env ]]; then docker compose config --quiet; fi
@@ -59,4 +63,14 @@ identity-db-shell:
 	docker compose exec identity-postgres sh -c \
 		'psql --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"'
 
-ci: repo-check stack-up gateway-smoke
+identity-sqlc-generate:
+	docker run --rm \
+		--volume "$(CURDIR):/src" \
+		--workdir /src/service/identity-service \
+		$(SQLC_IMAGE) generate
+
+identity-sqlc-check: identity-sqlc-generate
+	@git diff --exit-code -- $(IDENTITY_SQLC_GENERATED)
+	@test -z "$$(git ls-files --others --exclude-standard -- $(IDENTITY_SQLC_GENERATED))"
+
+ci: repo-check identity-sqlc-check stack-up gateway-smoke
