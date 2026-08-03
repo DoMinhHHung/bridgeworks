@@ -45,7 +45,11 @@ func run(parent context.Context, args []string) error {
 	if err != nil {
 		return errors.New("open migration database")
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.Warn("migration database close failed")
+		}
+	}()
 
 	if err := db.PingContext(ctx); err != nil {
 		return errors.New("ping migration database")
