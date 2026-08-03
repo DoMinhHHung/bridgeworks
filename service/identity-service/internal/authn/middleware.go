@@ -50,16 +50,16 @@ func New(
 	config.JWTKey = strings.TrimSpace(config.JWTKey)
 	config.Issuer = strings.TrimSpace(config.Issuer)
 	if config.JWTKey == "" {
-		return nil, errors.New("Clerk JWT key is required")
+		return nil, errors.New("clerk JWT key is required")
 	}
 	if config.Issuer == "" {
-		return nil, errors.New("Clerk issuer is required")
+		return nil, errors.New("clerk issuer is required")
 	}
 	if len(config.AuthorizedParties) == 0 {
-		return nil, errors.New("at least one Clerk authorized party is required")
+		return nil, errors.New("at least one clerk authorized party is required")
 	}
 	if config.Leeway <= 0 {
-		return nil, errors.New("Clerk authentication leeway must be greater than zero")
+		return nil, errors.New("clerk authentication leeway must be greater than zero")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -78,10 +78,10 @@ func New(
 	for _, party := range config.AuthorizedParties {
 		party = strings.TrimSpace(party)
 		if party == "" {
-			return nil, errors.New("Clerk authorized party must not be empty")
+			return nil, errors.New("clerk authorized party must not be empty")
 		}
 		if _, exists := authorizedParties[party]; exists {
-			return nil, errors.New("Clerk authorized party must be unique")
+			return nil, errors.New("clerk authorized party must be unique")
 		}
 		authorizedParties[party] = struct{}{}
 		parties = append(parties, party)
