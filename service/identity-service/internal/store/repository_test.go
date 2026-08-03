@@ -78,7 +78,7 @@ func TestGetCurrentUserByClerkUserIDMapsNarrowModel(t *testing.T) {
 		*destinations[5].(*pgtype.Timestamptz) = pgtype.Timestamptz{Time: createdAt, Valid: true}
 		*destinations[6].(*pgtype.Timestamptz) = pgtype.Timestamptz{Time: updatedAt, Valid: true}
 		return nil
-	}})
+	}}})
 
 	user, found, err := repository.GetCurrentUserByClerkUserID(context.Background(), "user_test")
 	if err != nil || !found {
