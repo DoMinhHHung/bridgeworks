@@ -10,26 +10,26 @@ import (
 )
 
 const (
-	defaultServiceName                    = "identity-service"
-	defaultHTTPAddr                       = ":8080"
-	defaultReadHeaderTimeout              = 5 * time.Second
-	defaultReadTimeout                    = 15 * time.Second
-	defaultWriteTimeout                   = 15 * time.Second
-	defaultIdleTimeout                    = 60 * time.Second
-	defaultShutdownTimeout                = 10 * time.Second
-	defaultLogLevel                       = "info"
-	defaultDatabaseConnectTimeout         = 5 * time.Second
-	defaultDatabaseReadinessTimeout       = 2 * time.Second
-	defaultDatabaseMaxConns               = int32(5)
-	defaultDatabaseMinConns               = int32(0)
-	defaultDatabaseMaxConnLifetime        = 30 * time.Minute
-	defaultDatabaseMaxConnIdleTime        = 5 * time.Minute
-	defaultDatabaseHealthCheckPeriod      = time.Minute
-	defaultClerkWebhookProcessTimeout     = 5 * time.Second
-	maximumClerkWebhookProcessTimeout     = 8 * time.Second
-	defaultClerkWebhookMaxBodyBytes       = int64(1_048_576)
-	maximumClerkWebhookMaxBodyBytes       = int64(5 * 1024 * 1024)
-	defaultMigrationTimeout               = time.Minute
+	defaultServiceName                = "identity-service"
+	defaultHTTPAddr                   = ":8080"
+	defaultReadHeaderTimeout          = 5 * time.Second
+	defaultReadTimeout                = 15 * time.Second
+	defaultWriteTimeout               = 15 * time.Second
+	defaultIdleTimeout                = 60 * time.Second
+	defaultShutdownTimeout            = 10 * time.Second
+	defaultLogLevel                   = "info"
+	defaultDatabaseConnectTimeout     = 5 * time.Second
+	defaultDatabaseReadinessTimeout   = 2 * time.Second
+	defaultDatabaseMaxConns           = int32(5)
+	defaultDatabaseMinConns           = int32(0)
+	defaultDatabaseMaxConnLifetime    = 30 * time.Minute
+	defaultDatabaseMaxConnIdleTime    = 5 * time.Minute
+	defaultDatabaseHealthCheckPeriod  = time.Minute
+	defaultClerkWebhookProcessTimeout = 5 * time.Second
+	maximumClerkWebhookProcessTimeout = 8 * time.Second
+	defaultClerkWebhookMaxBodyBytes   = int64(1_048_576)
+	maximumClerkWebhookMaxBodyBytes   = int64(5 * 1024 * 1024)
+	defaultMigrationTimeout           = time.Minute
 )
 
 type Config struct {
