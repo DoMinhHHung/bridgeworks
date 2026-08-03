@@ -34,6 +34,10 @@ func AccessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			writer := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(writer, r)
 
+			if isSuccessfulHealthProbe(r.URL.Path, writer.status) {
+				return
+			}
+
 			logger.InfoContext(r.Context(), "http request",
 				"request_id", RequestIDFromContext(r.Context()),
 				"method", r.Method,
@@ -43,6 +47,13 @@ func AccessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			)
 		})
 	}
+}
+
+func isSuccessfulHealthProbe(path string, status int) bool {
+	if status < http.StatusOK || status >= http.StatusBadRequest {
+		return false
+	}
+	return path == "/health/live" || path == "/health/ready"
 }
 
 type statusWriter struct {
