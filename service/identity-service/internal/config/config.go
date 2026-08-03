@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,6 +30,8 @@ const (
 	maximumClerkWebhookProcessTimeout = 8 * time.Second
 	defaultClerkWebhookMaxBodyBytes   = int64(1_048_576)
 	maximumClerkWebhookMaxBodyBytes   = int64(5 * 1024 * 1024)
+	defaultClerkAuthLeeway             = 5 * time.Second
+	maximumClerkAuthLeeway             = 30 * time.Second
 	defaultMigrationTimeout           = time.Minute
 )
 
@@ -54,6 +57,11 @@ type Config struct {
 	ClerkWebhookSigningSecret  string
 	ClerkWebhookProcessTimeout time.Duration
 	ClerkWebhookMaxBodyBytes   int64
+
+	ClerkJWTKey            string
+	ClerkIssuer            string
+	ClerkAuthorizedParties []string
+	ClerkAuthLeeway        time.Duration
 }
 
 type MigrationConfig struct {
@@ -178,6 +186,26 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		return Config{}, fmt.Errorf("CLERK_WEBHOOK_MAX_BODY_BYTES must be less than or equal to %d", maximumClerkWebhookMaxBodyBytes)
 	}
 
+	clerkJWTKey, err := requiredValue(lookup, "CLERK_JWT_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+	clerkIssuer, err := originValue(lookup, "CLERK_ISSUER")
+	if err != nil {
+		return Config{}, err
+	}
+	clerkAuthorizedParties, err := authorizedPartiesValue(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	clerkAuthLeeway, err := durationValue(lookup, "CLERK_AUTH_LEEWAY", defaultClerkAuthLeeway)
+	if err != nil {
+		return Config{}, err
+	}
+	if clerkAuthLeeway > maximumClerkAuthLeeway {
+		return Config{}, fmt.Errorf("CLERK_AUTH_LEEWAY must be less than or equal to %s", maximumClerkAuthLeeway)
+	}
+
 	return Config{
 		ServiceName:                serviceName,
 		HTTPAddr:                   httpAddr,
@@ -198,6 +226,10 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		ClerkWebhookSigningSecret:  clerkWebhookSigningSecret,
 		ClerkWebhookProcessTimeout: clerkWebhookProcessTimeout,
 		ClerkWebhookMaxBodyBytes:   clerkWebhookMaxBodyBytes,
+		ClerkJWTKey:                clerkJWTKey,
+		ClerkIssuer:                clerkIssuer,
+		ClerkAuthorizedParties:     clerkAuthorizedParties,
+		ClerkAuthLeeway:            clerkAuthLeeway,
 	}, nil
 }
 
@@ -277,6 +309,68 @@ func int64Value(lookup lookupEnvFunc, key string, fallback int64) (int64, error)
 		return 0, fmt.Errorf("%s must be a valid integer", key)
 	}
 	return value, nil
+}
+
+func originValue(lookup lookupEnvFunc, key string) (string, error) {
+	value, err := requiredValue(lookup, key)
+	if err != nil {
+		return "", err
+	}
+	if err := validateOrigin(key, value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func authorizedPartiesValue(lookup lookupEnvFunc) ([]string, error) {
+	raw, err := requiredValue(lookup, "CLERK_AUTHORIZED_PARTIES")
+	if err != nil {
+		return nil, err
+	}
+
+	items := strings.Split(raw, ",")
+	parties := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		party := strings.TrimSpace(item)
+		if party == "" {
+			return nil, fmt.Errorf("CLERK_AUTHORIZED_PARTIES must not contain empty items")
+		}
+		if _, exists := seen[party]; exists {
+			return nil, fmt.Errorf("CLERK_AUTHORIZED_PARTIES must not contain duplicates")
+		}
+		if err := validateOrigin("CLERK_AUTHORIZED_PARTIES", party); err != nil {
+			return nil, err
+		}
+		seen[party] = struct{}{}
+		parties = append(parties, party)
+	}
+	if len(parties) == 0 {
+		return nil, fmt.Errorf("CLERK_AUTHORIZED_PARTIES must contain at least one party")
+	}
+	return parties, nil
+}
+
+func validateOrigin(key, value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Opaque != "" {
+		return fmt.Errorf("%s must be a valid origin URL", key)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
+		return fmt.Errorf("%s must be an origin without path, query, fragment, or user information", key)
+	}
+
+	switch strings.ToLower(parsed.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" {
+			return nil
+		}
+		return fmt.Errorf("%s must use HTTPS outside localhost or 127.0.0.1", key)
+	default:
+		return fmt.Errorf("%s must use HTTP or HTTPS", key)
+	}
 }
 
 func logLevelValue(lookup lookupEnvFunc, key, fallback string) (slog.Level, error) {
