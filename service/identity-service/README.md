@@ -49,9 +49,10 @@ payload không được persist hoặc log.
 Webhook synchronization là eventual consistency. Mỗi supported event chạy trong
 một PostgreSQL transaction:
 
-1. Acquire transaction-level advisory lock theo `clerk_user_id`.
-2. Insert inbox row bằng `ON CONFLICT (event_id) DO NOTHING`.
-3. Duplicate delivery commit và trả 204 mà không mutate user.
+1. Insert inbox row bằng `ON CONFLICT (event_id) DO NOTHING`.
+2. Duplicate delivery commit và trả 204 mà không acquire user lock hoặc mutate
+   user.
+3. Acquire transaction-level advisory lock theo `clerk_user_id`.
 4. Nếu có superseding event cho cùng Clerk user, giữ inbox row nhưng bỏ qua user
    mutation, commit và trả 204.
 5. Apply create/update/delete projection.
