@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: BridgeWorks Identity Service
   version: 0.1.0
+servers:
+  - url: /api/v1/identity
+    description: BridgeWorks API Gateway
 paths:
   /health/live:
     get:
@@ -12,13 +15,17 @@ paths:
           description: The process is alive
           headers:
             X-Request-Id:
-              description: Request correlation identifier
-              schema:
-                type: string
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
   /health/ready:
     get:
       operationId: getReadiness
@@ -28,14 +35,66 @@ paths:
           description: The service is ready
           headers:
             X-Request-Id:
-              description: Request correlation identifier
-              schema:
-                type: string
+              $ref: "#/components/headers/RequestID"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 components:
+  headers:
+    RequestID:
+      description: Request correlation identifier
+      schema:
+        type: string
+  responses:
+    NotFound:
+      description: The requested resource was not found
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: not_found
+            message: resource not found
+            request_id: 0f440ea7-03e8-4ba4-b189-04e71ef2d234
+            details: {}
+    MethodNotAllowed:
+      description: The HTTP method is not allowed for the requested resource
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: method_not_allowed
+            message: method not allowed
+            request_id: 0f440ea7-03e8-4ba4-b189-04e71ef2d234
+            details: {}
+    InternalServerError:
+      description: The server failed to process the request
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            code: internal_error
+            message: internal server error
+            request_id: 0f440ea7-03e8-4ba4-b189-04e71ef2d234
+            details: {}
   schemas:
     HealthResponse:
       type: object
@@ -54,18 +113,17 @@ components:
       type: object
       additionalProperties: false
       required:
-        - error
+        - code
+        - message
+        - request_id
+        - details
       properties:
-        error:
+        code:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+        details:
           type: object
-          additionalProperties: false
-          required:
-            - code
-            - message
-          properties:
-            code:
-              type: string
-            message:
-              type: string
-            request_id:
-              type: string
+          example: {}
