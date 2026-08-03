@@ -1,4 +1,4 @@
-## BrigdeWorks
+## BridgeWorks
 # Private Talent Liquidity Network
 
 > A private exchange for verified software talent.

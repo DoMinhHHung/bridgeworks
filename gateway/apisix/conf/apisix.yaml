@@ -1,0 +1,21 @@
+routes:
+  - id: bridgeworks-gateway-health
+    name: bridgeworks-gateway-health
+    uri: /healthz
+    methods:
+      - GET
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      mocking:
+        response_status: 200
+        content_type: application/json
+        response_example: '{"status":"ok","component":"apisix","project":"bridgeworks"}'
+        with_mock_header: true
+    upstream:
+      type: roundrobin
+      nodes:
+        "127.0.0.1:1": 1
+#END

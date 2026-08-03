@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate repository
+        run: make repo-check
+
+  apisix:
+    name: APISIX smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Start APISIX
+        run: make gateway-up
+
+      - name: Test APISIX
+        run: make gateway-smoke
+
+      - name: Print APISIX logs on failure
+        if: failure()
+        run: docker compose logs --no-color apisix
+
+      - name: Stop containers
+        if: always()
+        run: make gateway-down
+
+  go-services:
+    name: Go services
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Detect service modules
+        id: modules
+        shell: bash
+        run: |
+          if compgen -G "service/*/go.mod" > /dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No Go service modules yet; skipping Go checks."
+          fi
+
+      - name: Set up Go
+        if: steps.modules.outputs.found == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Install golangci-lint
+        if: steps.modules.outputs.found == 'true'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11
+          install-only: true
+
+      - name: Validate Go services
+        if: steps.modules.outputs.found == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for module_file in service/*/go.mod; do
+            service_dir="$(dirname "${module_file}")"
+            echo "::group::${service_dir}"
+
+            unformatted="$(find "${service_dir}" -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
+            if [[ -n "${unformatted}" ]]; then
+              echo "Files require gofmt:"
+              echo "${unformatted}"
+              exit 1
+            fi
+
+            (
+              cd "${service_dir}"
+              go mod tidy -diff
+              go vet ./...
+              go test -race -coverprofile=coverage.out ./...
+              golangci-lint run ./...
+            )
+
+            echo "::endgroup::"
+          done
