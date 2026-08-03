@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/identity-clerk-webhook-sync
   pull_request:
   workflow_dispatch:
 
