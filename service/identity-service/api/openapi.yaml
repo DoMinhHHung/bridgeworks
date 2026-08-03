@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BridgeWorks Identity Service API
-  version: 0.2.0
-  description: Runtime health endpoints exposed through APISIX.
+  version: 0.3.0
+  description: Identity health and public Clerk webhook endpoints exposed through APISIX.
 paths:
   /api/v1/identity/health/live:
     get:
@@ -43,15 +43,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
-              examples:
-                notReady:
-                  value:
-                    code: service_unavailable
-                    message: service is not ready
-                    request_id: postgres-ready-check
-                    details: null
         default:
           $ref: "#/components/responses/ErrorResponse"
+  /api/v1/identity/webhooks/clerk:
+    post:
+      operationId: synchronizeClerkUserWebhook
+      summary: Synchronize a verified Clerk user webhook into the local identity projection
+      description: Public signed Clerk/Svix webhook endpoint. The request body is verified as raw bytes before JSON decoding.
+      responses:
+        "204":
+          description: Event processed, duplicated, stale, or unsupported
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+        "400":
+          description: Signature, required Svix headers, timestamp, or payload is invalid
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                invalidWebhook:
+                  value:
+                    code: invalid_webhook
+                    message: invalid webhook request
+                    request_id: webhook-request-id
+                    details: null
+        "413":
+          description: Request body exceeds the configured maximum
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: PostgreSQL is unavailable or processing timed out; Clerk should retry
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 components:
   headers:
     RequestID:
@@ -72,9 +110,7 @@ components:
     HealthResponse:
       type: object
       additionalProperties: false
-      required:
-        - status
-        - service
+      required: [status, service]
       properties:
         status:
           type: string
@@ -85,11 +121,7 @@ components:
     ErrorEnvelope:
       type: object
       additionalProperties: false
-      required:
-        - code
-        - message
-        - request_id
-        - details
+      required: [code, message, request_id, details]
       properties:
         code:
           type: string
