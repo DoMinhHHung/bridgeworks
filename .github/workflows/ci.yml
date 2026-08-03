@@ -168,9 +168,16 @@ jobs:
           grep --quiet '"request_id":"database-down-ready"' "${ready_body}"
           grep --quiet '"details":null' "${ready_body}"
 
-          forbidden_pattern='postgres://|bridgeworks_identity_local|identity-postgres|pgx|connection refused'
+          forbidden_pattern='postgres://|bridgeworks_identity|identity-postgres|pgx|connection refused|5432'
           if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" "${ready_body}"; then
             echo "readiness response leaked database details" >&2
+            exit 1
+          fi
+
+          service_logs="$(docker compose logs --no-color identity-service)"
+          printf '%s\n' "${service_logs}"
+          if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" <<< "${service_logs}"; then
+            echo "identity-service logs leaked database details" >&2
             exit 1
           fi
 
