@@ -2,14 +2,19 @@ package config
 
 import (
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
-	testDatabaseURL   = "postgres://runtime:runtime@identity-postgres:5432/bridgeworks?sslmode=disable"
-	testWebhookSecret = "whsec_local_test_secret"
+	testDatabaseURL      = "postgres://runtime:runtime@identity-postgres:5432/bridgeworks?sslmode=disable"
+	testWebhookSecret    = "whsec_local_test_secret"
+	testJWTKey           = "test-only-public-key"
+	testIssuer           = "https://clerk.bridgeworks.test"
+	testAuthorizedParty  = "http://localhost:3000"
+	testAuthorizedParty2 = "https://app.bridgeworks.test"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -42,6 +47,11 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.ClerkWebhookMaxBodyBytes != 1_048_576 {
 		t.Fatalf("unexpected Clerk webhook config: %+v", cfg)
 	}
+	if cfg.ClerkJWTKey != testJWTKey || cfg.ClerkIssuer != testIssuer ||
+		!reflect.DeepEqual(cfg.ClerkAuthorizedParties, []string{testAuthorizedParty}) ||
+		cfg.ClerkAuthLeeway != 5*time.Second {
+		t.Fatalf("unexpected Clerk authentication config: %+v", cfg)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -66,6 +76,10 @@ func TestLoadOverrides(t *testing.T) {
 		"CLERK_WEBHOOK_SIGNING_SECRET":  "whsec_override",
 		"CLERK_WEBHOOK_PROCESS_TIMEOUT": "8s",
 		"CLERK_WEBHOOK_MAX_BODY_BYTES":  "2048",
+		"CLERK_JWT_KEY":                 "  test-jwk-override  ",
+		"CLERK_ISSUER":                  "https://clerk.override.test",
+		"CLERK_AUTHORIZED_PARTIES":      " http://127.0.0.1:5173 , https://app.override.test ",
+		"CLERK_AUTH_LEEWAY":             "30s",
 	})))
 	if err != nil {
 		t.Fatalf("load overrides: %v", err)
@@ -86,6 +100,11 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ClerkWebhookSigningSecret != "whsec_override" ||
 		cfg.ClerkWebhookProcessTimeout != 8*time.Second || cfg.ClerkWebhookMaxBodyBytes != 2048 {
 		t.Fatalf("unexpected webhook config: %+v", cfg)
+	}
+	if cfg.ClerkJWTKey != "test-jwk-override" || cfg.ClerkIssuer != "https://clerk.override.test" ||
+		!reflect.DeepEqual(cfg.ClerkAuthorizedParties, []string{"http://127.0.0.1:5173", "https://app.override.test"}) ||
+		cfg.ClerkAuthLeeway != 30*time.Second {
+		t.Fatalf("unexpected authentication config: %+v", cfg)
 	}
 }
 
@@ -151,6 +170,69 @@ func TestLoadClerkWebhookProcessTimeoutInvariants(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsLocalHTTPOrigins(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := load(mapLookup(runtimeEnv(map[string]string{
+		"CLERK_ISSUER":             "http://localhost:8081",
+		"CLERK_AUTHORIZED_PARTIES": "http://127.0.0.1:5173,http://localhost:3000",
+	})))
+	if err != nil {
+		t.Fatalf("load local HTTP origins: %v", err)
+	}
+	if cfg.ClerkIssuer != "http://localhost:8081" ||
+		!reflect.DeepEqual(cfg.ClerkAuthorizedParties, []string{"http://127.0.0.1:5173", "http://localhost:3000"}) {
+		t.Fatalf("unexpected local origins: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidClerkAuthenticationConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		env       map[string]string
+		wantError string
+	}{
+		{
+			name: "missing JWK",
+			env: map[string]string{
+				"DATABASE_URL":                    testDatabaseURL,
+				"CLERK_WEBHOOK_SIGNING_SECRET":    testWebhookSecret,
+				"CLERK_ISSUER":                    testIssuer,
+				"CLERK_AUTHORIZED_PARTIES":        testAuthorizedParty,
+			},
+			wantError: "CLERK_JWT_KEY is required",
+		},
+		{name: "blank JWK", env: runtimeEnv(map[string]string{"CLERK_JWT_KEY": "  "}), wantError: "CLERK_JWT_KEY is required"},
+		{name: "missing issuer", env: runtimeEnv(map[string]string{"CLERK_ISSUER": "  "}), wantError: "CLERK_ISSUER is required"},
+		{name: "issuer has trailing slash", env: runtimeEnv(map[string]string{"CLERK_ISSUER": "https://clerk.bridgeworks.test/"}), wantError: "CLERK_ISSUER must be an origin"},
+		{name: "issuer HTTP outside local", env: runtimeEnv(map[string]string{"CLERK_ISSUER": "http://clerk.example.com"}), wantError: "CLERK_ISSUER must use HTTPS"},
+		{name: "missing authorized parties", env: runtimeEnv(map[string]string{"CLERK_AUTHORIZED_PARTIES": "  "}), wantError: "CLERK_AUTHORIZED_PARTIES is required"},
+		{name: "blank authorized party", env: runtimeEnv(map[string]string{"CLERK_AUTHORIZED_PARTIES": testAuthorizedParty + ", ," + testAuthorizedParty2}), wantError: "must not contain empty items"},
+		{name: "duplicate authorized party", env: runtimeEnv(map[string]string{"CLERK_AUTHORIZED_PARTIES": testAuthorizedParty + ", " + testAuthorizedParty}), wantError: "must not contain duplicates"},
+		{name: "authorized party HTTP outside local", env: runtimeEnv(map[string]string{"CLERK_AUTHORIZED_PARTIES": "http://app.example.com"}), wantError: "CLERK_AUTHORIZED_PARTIES must use HTTPS"},
+		{name: "authorized party has path", env: runtimeEnv(map[string]string{"CLERK_AUTHORIZED_PARTIES": "https://app.example.com/path"}), wantError: "CLERK_AUTHORIZED_PARTIES must be an origin"},
+		{name: "zero leeway", env: runtimeEnv(map[string]string{"CLERK_AUTH_LEEWAY": "0s"}), wantError: "CLERK_AUTH_LEEWAY must be greater than zero"},
+		{name: "leeway exceeds maximum", env: runtimeEnv(map[string]string{"CLERK_AUTH_LEEWAY": "31s"}), wantError: "CLERK_AUTH_LEEWAY must be less than or equal to 30s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := load(mapLookup(tt.env))
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %q, want substring %q", err, tt.wantError)
+			}
+			for _, forbidden := range []string{testJWTKey, "test-only-public-key-sensitive", testDatabaseURL, testWebhookSecret} {
+				if strings.Contains(err.Error(), forbidden) {
+					t.Fatalf("error leaked configuration: %q", err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 
@@ -182,7 +264,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("error = %q, want substring %q", err, tt.wantError)
 			}
-			for _, secret := range []string{testDatabaseURL, "runtime:runtime", testWebhookSecret, "whsec_override"} {
+			for _, secret := range []string{testDatabaseURL, "runtime:runtime", testWebhookSecret, "whsec_override", testJWTKey} {
 				if strings.Contains(err.Error(), secret) {
 					t.Fatalf("error leaked configuration: %q", err)
 				}
@@ -227,6 +309,9 @@ func runtimeEnv(overrides map[string]string) map[string]string {
 	values := map[string]string{
 		"DATABASE_URL":                 testDatabaseURL,
 		"CLERK_WEBHOOK_SIGNING_SECRET": testWebhookSecret,
+		"CLERK_JWT_KEY":                testJWTKey,
+		"CLERK_ISSUER":                 testIssuer,
+		"CLERK_AUTHORIZED_PARTIES":     testAuthorizedParty,
 	}
 	for key, value := range overrides {
 		values[key] = value
