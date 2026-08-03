@@ -1,0 +1,86 @@
+openapi: 3.1.0
+info:
+  title: BridgeWorks Identity Service API
+  version: 0.1.0
+  description: Runtime health endpoints exposed through APISIX.
+servers:
+  - url: http://127.0.0.1:9080
+paths:
+  /api/v1/identity/health/live:
+    get:
+      operationId: getIdentityLiveness
+      summary: Check whether the identity process is alive
+      responses:
+        "200":
+          description: Process is alive
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+  /api/v1/identity/health/ready:
+    get:
+      operationId: getIdentityReadiness
+      summary: Check whether the identity process is ready to receive traffic
+      responses:
+        "200":
+          description: Process is ready
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+components:
+  headers:
+    RequestID:
+      description: Request correlation identifier generated or forwarded by APISIX.
+      schema:
+        type: string
+  responses:
+    ErrorResponse:
+      description: Request failed
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: identity-service
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - request_id
+        - details
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+        details: {}
