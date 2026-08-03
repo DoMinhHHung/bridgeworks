@@ -197,10 +197,10 @@ func TestLoadRejectsInvalidClerkAuthenticationConfig(t *testing.T) {
 		{
 			name: "missing JWK",
 			env: map[string]string{
-				"DATABASE_URL":                    testDatabaseURL,
-				"CLERK_WEBHOOK_SIGNING_SECRET":    testWebhookSecret,
-				"CLERK_ISSUER":                    testIssuer,
-				"CLERK_AUTHORIZED_PARTIES":        testAuthorizedParty,
+				"DATABASE_URL":                 testDatabaseURL,
+				"CLERK_WEBHOOK_SIGNING_SECRET": testWebhookSecret,
+				"CLERK_ISSUER":                 testIssuer,
+				"CLERK_AUTHORIZED_PARTIES":     testAuthorizedParty,
 			},
 			wantError: "CLERK_JWT_KEY is required",
 		},
