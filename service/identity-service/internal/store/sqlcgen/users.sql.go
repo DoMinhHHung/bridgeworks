@@ -7,7 +7,6 @@ package sqlcgen
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -16,7 +15,7 @@ const getAppUserByClerkID = `-- name: GetAppUserByClerkID :one
 select
     id,
     clerk_user_id,
-    primary_email::text as primary_email,
+    primary_email,
     id_user,
     status,
     created_at,
@@ -25,19 +24,9 @@ from app.app_users
 where clerk_user_id = $1
 `
 
-type GetAppUserByClerkIDRow struct {
-	ID           uuid.UUID
-	ClerkUserID  string
-	PrimaryEmail *string
-	IDUser       string
-	Status       string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-func (q *Queries) GetAppUserByClerkID(ctx context.Context, clerkUserID string) (GetAppUserByClerkIDRow, error) {
+func (q *Queries) GetAppUserByClerkID(ctx context.Context, clerkUserID string) (AppAppUser, error) {
 	row := q.db.QueryRow(ctx, getAppUserByClerkID, clerkUserID)
-	var i GetAppUserByClerkIDRow
+	var i AppAppUser
 	err := row.Scan(
 		&i.ID,
 		&i.ClerkUserID,
