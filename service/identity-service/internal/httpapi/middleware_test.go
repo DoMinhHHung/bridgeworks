@@ -12,10 +12,10 @@ import (
 
 func TestAccessLogBehavior(t *testing.T) {
 	tests := []struct {
-		name      string
-		method    string
-		path      string
-		wantLog   bool
+		name    string
+		method  string
+		path    string
+		wantLog bool
 	}{
 		{
 			name:    "ordinary request is logged",
@@ -57,7 +57,7 @@ func TestAccessLogBehavior(t *testing.T) {
 
 func TestRecoverReturnsSafeInternalError(t *testing.T) {
 	const (
-		requestID = "panic-request"
+		requestID  = "panic-request"
 		panicValue = "sensitive-panic-value"
 	)
 
