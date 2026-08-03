@@ -1,4 +1,4 @@
--- name: GetAppUserByClerkID :one
+-- name: GetAppUserByClerkUserID :one
 select
     id,
     clerk_user_id,
