@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: repo-check gateway-up gateway-down gateway-restart gateway-logs gateway-smoke ci
+.PHONY: repo-check gateway-up stack-up stack-down gateway-restart gateway-logs gateway-smoke identity-smoke ci
 
 repo-check:
 	@test -f compose.yaml
@@ -14,7 +14,10 @@ repo-check:
 gateway-up:
 	docker compose up -d apisix
 
-gateway-down:
+stack-up:
+	docker compose up -d --build
+
+stack-down:
 	docker compose down --remove-orphans
 
 gateway-restart:
@@ -24,6 +27,12 @@ gateway-logs:
 	docker compose logs --follow --tail=200 apisix
 
 gateway-smoke:
-	./gateway/apisix/scripts/smoke-test.sh
+	./gateway/apisix/scripts/smoke-test.sh gateway
 
-ci: repo-check gateway-up gateway-smoke
+identity-smoke:
+	./gateway/apisix/scripts/smoke-test.sh identity
+
+ci: repo-check
+	$(MAKE) stack-up
+	$(MAKE) gateway-smoke
+	$(MAKE) identity-smoke
