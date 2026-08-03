@@ -13,6 +13,7 @@ repo-check:
 	@test -f service/identity-service/migrations/000001_create_app_users.sql
 	@test "$$(tail -n 1 gateway/apisix/conf/apisix.yaml)" = "#END"
 	@docker compose --env-file .env.example config --quiet
+	@if [[ -f .env ]]; then docker compose config --quiet; fi
 	@echo "Repository checks passed."
 
 gateway-up:
