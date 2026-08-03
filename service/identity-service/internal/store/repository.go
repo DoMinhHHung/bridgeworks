@@ -109,8 +109,8 @@ func (t *transaction) GetUserByClerkID(ctx context.Context, clerkUserID string) 
 		PrimaryEmail: row.PrimaryEmail,
 		IDUser:       row.IDUser,
 		Status:       row.Status,
-		CreatedAt:    row.CreatedAt,
-		UpdatedAt:    row.UpdatedAt,
+		CreatedAt:    row.CreatedAt.Time.UTC(),
+		UpdatedAt:    row.UpdatedAt.Time.UTC(),
 	}, true, nil
 }
 
