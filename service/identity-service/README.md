@@ -1,16 +1,19 @@
 # identity-service
 
-Identity boundary của BridgeWorks. Runtime foundation này chỉ cung cấp health
-endpoints; chưa có Clerk, PostgreSQL, migration execution hoặc `/api/v1/me`.
+Identity boundary của BridgeWorks. PR foundation này thêm PostgreSQL runtime,
+database-backed readiness và standalone migration binary; chưa có Clerk,
+business logic, repository hoặc `/api/v1/me`.
 
-## Boundary
+## Boundary and ownership
 
-Service sở hữu Clerk user mapping, local account lifecycle, public `id_user`,
-minimal primary email projection và Clerk webhook inbox. Service không sở hữu
-password, session, magic link, email verification, organization hoặc talent.
+Service sở hữu schema `app`, Clerk user mapping, local account lifecycle, public
+`id_user`, minimal primary email projection và Clerk webhook inbox. Service
+không sở hữu password, session, magic link, email verification, organization
+hoặc talent. Service khác không được đọc database identity trực tiếp.
 
-Migration `migrations/000001_create_app_users.sql` là locked contract và không
-được runtime bootstrap tự động apply.
+`migrations/000001_create_app_users.sql` vẫn là locked schema contract.
+`identity-service` không tự chạy migration lúc startup. DDL chỉ được apply qua
+standalone `identity-migrate`.
 
 ## Requirements
 
@@ -18,7 +21,24 @@ Migration `migrations/000001_create_app_users.sql` là locked contract và khôn
 - Docker Engine với Docker Compose plugin
 - `golangci-lint` v2.11 khi chạy lint local
 
-## Configuration
+## Database credentials
+
+- `DATABASE_URL`: runtime role cho persistent identity-service. Hosted
+  staging/production nên là least-privileged application role.
+- `MIGRATION_DATABASE_URL`: migration/owner role có quyền DDL cần thiết.
+- Local development dùng cùng một role cho đơn giản.
+- Hosted Supabase/staging/production phải tách hai credentials khi provisioning
+  hoàn tất.
+- Không commit credentials hoặc database URLs thật.
+
+Với hosted Supabase:
+
+- Persistent backend ưu tiên direct connection.
+- Deployment IPv4-only dùng Supavisor session mode.
+- Không dùng transaction pooler cho persistent identity-service.
+- Migration URL ưu tiên direct connection.
+
+## Runtime configuration
 
 | Variable | Default |
 | --- | --- |
@@ -30,62 +50,90 @@ Migration `migrations/000001_create_app_users.sql` là locked contract và khôn
 | `HTTP_IDLE_TIMEOUT` | `60s` |
 | `SHUTDOWN_TIMEOUT` | `10s` |
 | `LOG_LEVEL` | `info` |
+| `DATABASE_URL` | required |
+| `DATABASE_CONNECT_TIMEOUT` | `5s` |
+| `DATABASE_READINESS_TIMEOUT` | `2s` |
+| `DATABASE_MAX_CONNS` | `5` |
+| `DATABASE_MIN_CONNS` | `0` |
+| `DATABASE_MAX_CONN_LIFETIME` | `30m` |
+| `DATABASE_MAX_CONN_IDLE_TIME` | `5m` |
+| `DATABASE_HEALTH_CHECK_PERIOD` | `1m` |
 
-Duration phải dùng Go duration syntax và phải lớn hơn zero. `LOG_LEVEL` chỉ
-nhận chính xác `debug`, `info`, `warn`, `error` theo kiểu case-insensitive; các
-level offset như `INFO+2` hoặc `ERROR-8` bị reject. Config sai làm process fail
-ngay lúc startup.
+All durations phải lớn hơn zero. `DATABASE_MAX_CONNS` phải lớn hơn zero;
+`DATABASE_MIN_CONNS` phải từ zero đến max. Config sai làm process fail startup.
+Errors không echo database URL.
 
-## Run service locally
+## Migration configuration
 
-```bash
-cd service/identity-service
-cp .env.example .env
-set -a
-source .env
-set +a
-go run ./cmd/identity-service
+| Variable | Default |
+| --- | --- |
+| `MIGRATION_DATABASE_URL` | required |
+| `MIGRATION_TIMEOUT` | `1m` |
+| `LOG_LEVEL` | `info` |
+
+Migration binary chỉ hỗ trợ:
+
+```text
+up
+status
+version
 ```
 
-Direct service verification:
+Không expose `down`, `reset`, `redo` hoặc destructive command. Goose version
+table là `app.goose_db_version`. Binary tạo schema `app` trước khi Goose
+initialize version table; business tables chỉ được tạo từ SQL migrations.
 
-```bash
-curl -i http://127.0.0.1:8080/health/live
-curl -i http://127.0.0.1:8080/health/ready
-```
-
-## Run through APISIX
+## Local Compose workflow
 
 From repository root:
 
 ```bash
 cp -n .env.example .env
 make stack-up
+docker compose ps
 make gateway-smoke
 ```
 
-Public gateway routes:
+`stack-up` start PostgreSQL, chạy migration one-shot, rồi start identity-service
+và APISIX. PostgreSQL và identity-service không publish host ports.
+
+Migration commands:
 
 ```bash
-curl -i http://127.0.0.1:9080/api/v1/identity/health/live
-curl -i http://127.0.0.1:9080/api/v1/identity/health/ready
+make identity-migrate-up
+make identity-migrate-status
+make identity-migrate-version
 ```
 
-`identity-service` chỉ dùng Docker `expose`; host không publish port 8080.
-APISIX gọi `identity-service:8080` qua private `bridgeworks` network.
+Database operations:
 
-## Verify
+```bash
+make identity-db-logs
+make identity-db-shell
+```
 
-Repository root:
+Không có destructive reset target.
+
+## Health semantics
+
+- `/health/live`: luôn 200 khi process và HTTP stack còn sống; không ping DB.
+- `/health/ready`: ping PostgreSQL với `DATABASE_READINESS_TIMEOUT`.
+- Database unavailable/timeout trả 503 với redacted envelope:
+
+```json
+{
+  "code": "service_unavailable",
+  "message": "service is not ready",
+  "request_id": "database-down-ready",
+  "details": null
+}
+```
+
+## Verification
 
 ```bash
 make repo-check
-docker compose config --quiet
-```
 
-Service module:
-
-```bash
 cd service/identity-service
 unformatted="$(find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
 test -z "${unformatted}" || { printf '%s\n' "${unformatted}"; exit 1; }
@@ -93,54 +141,30 @@ go mod tidy -diff
 go vet ./...
 go test -race -coverprofile=coverage.out ./...
 golangci-lint run ./...
-```
+cd ../..
 
-Gateway-independent verification:
+docker compose config --quiet
+docker compose down --remove-orphans --volumes
 
-```bash
-docker compose down --remove-orphans
 make gateway-up
-curl --fail --show-error --silent http://127.0.0.1:9080/healthz
-```
+curl -i http://127.0.0.1:9080/healthz
 
-Full container verification:
+docker compose up -d identity-postgres
+docker compose run --rm identity-migrate up
+docker compose run --rm identity-migrate up
+docker compose run --rm identity-migrate version
+docker compose run --rm identity-migrate status
 
-```bash
 make stack-up
 docker compose ps
 make gateway-smoke
-curl -i -H 'X-Request-Id: verify-live-request-id' \
-  http://127.0.0.1:9080/api/v1/identity/health/live
-curl -i -H 'X-Request-Id: verify-ready-request-id' \
-  http://127.0.0.1:9080/api/v1/identity/health/ready
-make stack-down
+
+docker compose stop identity-postgres
+curl -i http://127.0.0.1:9080/api/v1/identity/health/live
+curl -i http://127.0.0.1:9080/api/v1/identity/health/ready
+docker compose start identity-postgres
+make gateway-smoke
 ```
 
-## Compose targets
-
-- `make gateway-up`, `gateway-restart`, `gateway-logs`: chỉ tác động APISIX.
-- `make stack-up`, `stack-restart`, `stack-logs`: tác động APISIX và identity-service.
-- `make stack-down`: teardown toàn bộ Compose stack.
-
-APISIX không phụ thuộc lifecycle của identity-service; `/healthz` phải hoạt động
-ngay cả khi identity-service chưa start hoặc unhealthy.
-
-## Health semantics
-
-- `/health/live`: process đang sống và HTTP stack phản hồi.
-- `/health/ready`: process đã load config, dựng router và sẵn sàng nhận traffic.
-
-Slice này chưa có external dependency, nên readiness chưa probe PostgreSQL.
-Khi thêm DB, readiness phải phản ánh dependency cần thiết thay vì luôn trả 200.
-
-Mọi response có `X-Request-Id`. Service reuse request ID hợp lệ do APISIX gửi;
-nếu thiếu hoặc không hợp lệ thì generate UUIDv4 mới. Error response dùng shape:
-
-```json
-{
-  "code": "not_found",
-  "message": "route not found",
-  "request_id": "7d77b7a8-37a6-4f27-98f1-b5dd80753a87",
-  "details": null
-}
-```
+APISIX không có `depends_on`; `/healthz` phải hoạt động ngay cả khi PostgreSQL,
+migration hoặc identity-service chưa start.

@@ -12,7 +12,50 @@ services:
     networks:
       - bridgeworks
 
+  identity-postgres:
+    image: postgres:17.10-alpine3.22
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${IDENTITY_POSTGRES_DB:?IDENTITY_POSTGRES_DB is required}
+      POSTGRES_USER: ${IDENTITY_POSTGRES_USER:?IDENTITY_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${IDENTITY_POSTGRES_PASSWORD:?IDENTITY_POSTGRES_PASSWORD is required}
+    volumes:
+      - identity-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - bridgeworks
+
+  identity-migrate:
+    image: bridgeworks-identity-service:local
+    build:
+      context: ./service/identity-service
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: "1.26.5"
+    restart: "no"
+    entrypoint:
+      - /usr/local/bin/identity-migrate
+    command:
+      - up
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+      MIGRATION_TIMEOUT: ${MIGRATION_TIMEOUT:-1m}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      identity-postgres:
+        condition: service_healthy
+    networks:
+      - bridgeworks
+
   identity-service:
+    image: bridgeworks-identity-service:local
     build:
       context: ./service/identity-service
       dockerfile: Dockerfile
@@ -22,14 +65,25 @@ services:
     environment:
       SERVICE_NAME: identity-service
       HTTP_ADDR: :8080
-      HTTP_READ_HEADER_TIMEOUT: 5s
-      HTTP_READ_TIMEOUT: 15s
-      HTTP_WRITE_TIMEOUT: 15s
-      HTTP_IDLE_TIMEOUT: 60s
-      SHUTDOWN_TIMEOUT: 10s
-      LOG_LEVEL: info
+      HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-5s}
+      HTTP_READ_TIMEOUT: ${HTTP_READ_TIMEOUT:-15s}
+      HTTP_WRITE_TIMEOUT: ${HTTP_WRITE_TIMEOUT:-15s}
+      HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-60s}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-10s}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      DATABASE_CONNECT_TIMEOUT: ${DATABASE_CONNECT_TIMEOUT:-5s}
+      DATABASE_READINESS_TIMEOUT: ${DATABASE_READINESS_TIMEOUT:-2s}
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-5}
+      DATABASE_MIN_CONNS: ${DATABASE_MIN_CONNS:-0}
+      DATABASE_MAX_CONN_LIFETIME: ${DATABASE_MAX_CONN_LIFETIME:-30m}
+      DATABASE_MAX_CONN_IDLE_TIME: ${DATABASE_MAX_CONN_IDLE_TIME:-5m}
+      DATABASE_HEALTH_CHECK_PERIOD: ${DATABASE_HEALTH_CHECK_PERIOD:-1m}
     expose:
       - "8080"
+    depends_on:
+      identity-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -47,3 +101,6 @@ services:
 networks:
   bridgeworks:
     driver: bridge
+
+volumes:
+  identity-postgres-data:

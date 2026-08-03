@@ -4,19 +4,28 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	defaultServiceName       = "identity-service"
-	defaultHTTPAddr          = ":8080"
-	defaultReadHeaderTimeout = 5 * time.Second
-	defaultReadTimeout       = 15 * time.Second
-	defaultWriteTimeout      = 15 * time.Second
-	defaultIdleTimeout       = 60 * time.Second
-	defaultShutdownTimeout   = 10 * time.Second
-	defaultLogLevel          = "info"
+	defaultServiceName               = "identity-service"
+	defaultHTTPAddr                  = ":8080"
+	defaultReadHeaderTimeout         = 5 * time.Second
+	defaultReadTimeout               = 15 * time.Second
+	defaultWriteTimeout              = 15 * time.Second
+	defaultIdleTimeout               = 60 * time.Second
+	defaultShutdownTimeout           = 10 * time.Second
+	defaultLogLevel                  = "info"
+	defaultDatabaseConnectTimeout    = 5 * time.Second
+	defaultDatabaseReadinessTimeout  = 2 * time.Second
+	defaultDatabaseMaxConns          = int32(5)
+	defaultDatabaseMinConns          = int32(0)
+	defaultDatabaseMaxConnLifetime   = 30 * time.Minute
+	defaultDatabaseMaxConnIdleTime   = 5 * time.Minute
+	defaultDatabaseHealthCheckPeriod = time.Minute
+	defaultMigrationTimeout          = time.Minute
 )
 
 type Config struct {
@@ -28,12 +37,31 @@ type Config struct {
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
 	LogLevel          slog.Level
+
+	DatabaseURL               string
+	DatabaseConnectTimeout    time.Duration
+	DatabaseReadinessTimeout  time.Duration
+	DatabaseMaxConns          int32
+	DatabaseMinConns          int32
+	DatabaseMaxConnLifetime   time.Duration
+	DatabaseMaxConnIdleTime   time.Duration
+	DatabaseHealthCheckPeriod time.Duration
+}
+
+type MigrationConfig struct {
+	DatabaseURL string
+	Timeout     time.Duration
+	LogLevel    slog.Level
 }
 
 type lookupEnvFunc func(string) (string, bool)
 
 func Load() (Config, error) {
 	return load(os.LookupEnv)
+}
+
+func LoadMigration() (MigrationConfig, error) {
+	return loadMigration(os.LookupEnv)
 }
 
 func load(lookup lookupEnvFunc) (Config, error) {
@@ -77,16 +105,105 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		return Config{}, err
 	}
 
+	databaseURL, err := requiredValue(lookup, "DATABASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+
+	databaseConnectTimeout, err := durationValue(lookup, "DATABASE_CONNECT_TIMEOUT", defaultDatabaseConnectTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+
+	databaseReadinessTimeout, err := durationValue(lookup, "DATABASE_READINESS_TIMEOUT", defaultDatabaseReadinessTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+
+	databaseMaxConns, err := int32Value(lookup, "DATABASE_MAX_CONNS", defaultDatabaseMaxConns)
+	if err != nil {
+		return Config{}, err
+	}
+	if databaseMaxConns <= 0 {
+		return Config{}, fmt.Errorf("DATABASE_MAX_CONNS must be greater than zero")
+	}
+
+	databaseMinConns, err := int32Value(lookup, "DATABASE_MIN_CONNS", defaultDatabaseMinConns)
+	if err != nil {
+		return Config{}, err
+	}
+	if databaseMinConns < 0 {
+		return Config{}, fmt.Errorf("DATABASE_MIN_CONNS must be greater than or equal to zero")
+	}
+	if databaseMinConns > databaseMaxConns {
+		return Config{}, fmt.Errorf("DATABASE_MIN_CONNS must be less than or equal to DATABASE_MAX_CONNS")
+	}
+
+	databaseMaxConnLifetime, err := durationValue(lookup, "DATABASE_MAX_CONN_LIFETIME", defaultDatabaseMaxConnLifetime)
+	if err != nil {
+		return Config{}, err
+	}
+
+	databaseMaxConnIdleTime, err := durationValue(lookup, "DATABASE_MAX_CONN_IDLE_TIME", defaultDatabaseMaxConnIdleTime)
+	if err != nil {
+		return Config{}, err
+	}
+
+	databaseHealthCheckPeriod, err := durationValue(lookup, "DATABASE_HEALTH_CHECK_PERIOD", defaultDatabaseHealthCheckPeriod)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		ServiceName:       serviceName,
-		HTTPAddr:          httpAddr,
-		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		ShutdownTimeout:   shutdownTimeout,
-		LogLevel:          logLevel,
+		ServiceName:               serviceName,
+		HTTPAddr:                  httpAddr,
+		ReadHeaderTimeout:         readHeaderTimeout,
+		ReadTimeout:               readTimeout,
+		WriteTimeout:              writeTimeout,
+		IdleTimeout:               idleTimeout,
+		ShutdownTimeout:           shutdownTimeout,
+		LogLevel:                  logLevel,
+		DatabaseURL:               databaseURL,
+		DatabaseConnectTimeout:    databaseConnectTimeout,
+		DatabaseReadinessTimeout:  databaseReadinessTimeout,
+		DatabaseMaxConns:          databaseMaxConns,
+		DatabaseMinConns:          databaseMinConns,
+		DatabaseMaxConnLifetime:   databaseMaxConnLifetime,
+		DatabaseMaxConnIdleTime:   databaseMaxConnIdleTime,
+		DatabaseHealthCheckPeriod: databaseHealthCheckPeriod,
 	}, nil
+}
+
+func loadMigration(lookup lookupEnvFunc) (MigrationConfig, error) {
+	databaseURL, err := requiredValue(lookup, "MIGRATION_DATABASE_URL")
+	if err != nil {
+		return MigrationConfig{}, err
+	}
+
+	timeout, err := durationValue(lookup, "MIGRATION_TIMEOUT", defaultMigrationTimeout)
+	if err != nil {
+		return MigrationConfig{}, err
+	}
+
+	logLevel, err := logLevelValue(lookup, "LOG_LEVEL", defaultLogLevel)
+	if err != nil {
+		return MigrationConfig{}, err
+	}
+
+	return MigrationConfig{
+		DatabaseURL: databaseURL,
+		Timeout:     timeout,
+		LogLevel:    logLevel,
+	}, nil
+}
+
+func requiredValue(lookup lookupEnvFunc, key string) (string, error) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s is required", key)
+	}
+
+	return strings.TrimSpace(value), nil
 }
 
 func nonEmptyValue(lookup lookupEnvFunc, key, fallback string) (string, error) {
@@ -112,13 +229,28 @@ func durationValue(lookup lookupEnvFunc, key string, fallback time.Duration) (ti
 	raw = strings.TrimSpace(raw)
 	value, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("%s must be a valid duration: %w", key, err)
+		return 0, fmt.Errorf("%s must be a valid duration", key)
 	}
 	if value <= 0 {
 		return 0, fmt.Errorf("%s must be greater than zero", key)
 	}
 
 	return value, nil
+}
+
+func int32Value(lookup lookupEnvFunc, key string, fallback int32) (int32, error) {
+	raw, ok := lookup(key)
+	if !ok {
+		return fallback, nil
+	}
+
+	raw = strings.TrimSpace(raw)
+	value, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid 32-bit integer", key)
+	}
+
+	return int32(value), nil
 }
 
 func logLevelValue(lookup lookupEnvFunc, key, fallback string) (slog.Level, error) {

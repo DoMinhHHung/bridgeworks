@@ -22,26 +22,78 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Configure local environment
+        run: cp .env.example .env
+
       - name: Validate repository
         run: make repo-check
 
   apisix:
-    name: APISIX smoke test
+    name: APISIX and PostgreSQL integration
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Configure local environment
+        run: cp .env.example .env
+
       - name: Verify gateway independently
         run: |
-          docker compose down --remove-orphans
-          docker compose up -d apisix
+          docker compose down --remove-orphans --volumes
+          make gateway-up
           curl --retry 30 --retry-all-errors --retry-delay 2 \
             --fail --show-error --silent \
+            --output /dev/null \
+            http://127.0.0.1:9080/healthz
+          curl --fail --show-error --silent \
             http://127.0.0.1:9080/healthz
 
+      - name: Verify migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker compose up -d identity-postgres
+          docker compose run --name bridgeworks-ci-identity-migrate identity-migrate up
+          migration_exit_code="$(docker inspect --format '{{.State.ExitCode}}' bridgeworks-ci-identity-migrate)"
+          test "${migration_exit_code}" = "0"
+          docker rm bridgeworks-ci-identity-migrate
+
+          docker compose run --rm identity-migrate up
+
+          version_output="$(docker compose run --rm identity-migrate version)"
+          printf '%s\n' "${version_output}"
+          grep --quiet '"version":1' <<< "${version_output}"
+
+          docker compose run --rm identity-migrate status
+
+          postgres_id="$(docker compose ps -q identity-postgres)"
+          test "$(docker inspect --format '{{.State.Health.Status}}' "${postgres_id}")" = "healthy"
+
+          postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
+          postgres_db="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_DB=//p')"
+          test -n "${postgres_user}"
+          test -n "${postgres_db}"
+
+          docker compose exec -T identity-postgres psql \
+            --username "${postgres_user}" \
+            --dbname "${postgres_db}" \
+            --set ON_ERROR_STOP=1 \
+            --tuples-only \
+            --command "
+              select to_regclass('app.goose_db_version') is not null;
+              select to_regclass('app.app_users') is not null;
+              select to_regclass('app.clerk_webhook_events') is not null;
+              select exists (
+                select 1
+                from pg_extension
+                where extname = 'citext'
+              );
+            " | grep --count ' t' | grep --quiet '^4$'
+
       - name: Build and start full stack
-        run: docker compose up -d --build
+        run: make stack-up
 
       - name: Inspect full stack
         shell: bash
@@ -50,46 +102,98 @@ jobs:
 
           docker compose ps
 
-          container_id="$(docker compose ps -q identity-service)"
-          port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
-          case "${port_bindings}" in
-            null|'{}')
-              ;;
-            *)
-              echo "identity-service must not publish port 8080: ${port_bindings}" >&2
-              exit 1
-              ;;
-          esac
+          for service in identity-service identity-postgres; do
+            container_id="$(docker compose ps -q "${service}")"
+            port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
+            case "${port_bindings}" in
+              null|'{}')
+                ;;
+              *)
+                echo "${service} must not publish host ports: ${port_bindings}" >&2
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Test APISIX and identity-service
         run: make gateway-smoke
 
-      - name: Curl identity health routes
+      - name: Verify healthy routes
         shell: bash
         run: |
           set -euo pipefail
 
           live_response="$(curl --fail --show-error --silent -i \
-            -H 'X-Request-Id: verify-live-request-id' \
+            -H 'X-Request-Id: postgres-live-check' \
             http://127.0.0.1:9080/api/v1/identity/health/live)"
           printf '%s\n' "${live_response}"
-          grep --quiet --ignore-case '^X-Request-Id: verify-live-request-id' \
+          grep --quiet 'HTTP/1.1 200' <<< "${live_response}"
+          grep --quiet --ignore-case '^X-Request-Id: postgres-live-check' \
             <<< "${live_response//$'\r'/}"
 
           ready_response="$(curl --fail --show-error --silent -i \
-            -H 'X-Request-Id: verify-ready-request-id' \
+            -H 'X-Request-Id: postgres-ready-check' \
             http://127.0.0.1:9080/api/v1/identity/health/ready)"
           printf '%s\n' "${ready_response}"
-          grep --quiet --ignore-case '^X-Request-Id: verify-ready-request-id' \
+          grep --quiet 'HTTP/1.1 200' <<< "${ready_response}"
+          grep --quiet --ignore-case '^X-Request-Id: postgres-ready-check' \
             <<< "${ready_response//$'\r'/}"
+
+      - name: Verify dependency outage semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker compose stop identity-postgres
+
+          live_response="$(curl --fail --show-error --silent -i \
+            -H 'X-Request-Id: database-down-live' \
+            http://127.0.0.1:9080/api/v1/identity/health/live)"
+          printf '%s\n' "${live_response}"
+          grep --quiet 'HTTP/1.1 200' <<< "${live_response}"
+          grep --quiet --ignore-case '^X-Request-Id: database-down-live' \
+            <<< "${live_response//$'\r'/}"
+
+          ready_body="$(mktemp)"
+          ready_headers="$(mktemp)"
+          status_code="$(curl --show-error --silent \
+            --output "${ready_body}" \
+            --dump-header "${ready_headers}" \
+            --write-out '%{http_code}' \
+            -H 'X-Request-Id: database-down-ready' \
+            http://127.0.0.1:9080/api/v1/identity/health/ready)"
+          cat "${ready_headers}"
+          cat "${ready_body}"
+          test "${status_code}" = "503"
+          grep --quiet --ignore-case '^X-Request-Id: database-down-ready' "${ready_headers}"
+          grep --quiet '"code":"service_unavailable"' "${ready_body}"
+          grep --quiet '"message":"service is not ready"' "${ready_body}"
+          grep --quiet '"request_id":"database-down-ready"' "${ready_body}"
+          grep --quiet '"details":null' "${ready_body}"
+
+          forbidden_pattern='postgres://|bridgeworks_identity|identity-postgres|pgx|connection refused|5432'
+          if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" "${ready_body}"; then
+            echo "readiness response leaked database details" >&2
+            exit 1
+          fi
+
+          service_logs="$(docker compose logs --no-color identity-service)"
+          printf '%s\n' "${service_logs}"
+          if grep --extended-regexp --ignore-case --quiet "${forbidden_pattern}" <<< "${service_logs}"; then
+            echo "identity-service logs leaked database details" >&2
+            exit 1
+          fi
+
+          docker compose start identity-postgres
+          make gateway-smoke
 
       - name: Print container logs on failure
         if: failure()
-        run: docker compose logs --no-color apisix identity-service
+        run: docker compose logs --no-color apisix identity-service identity-postgres identity-migrate
 
       - name: Stop containers
         if: always()
-        run: docker compose down --remove-orphans
+        run: docker compose down --remove-orphans --volumes
 
   go-services:
     name: Go services
