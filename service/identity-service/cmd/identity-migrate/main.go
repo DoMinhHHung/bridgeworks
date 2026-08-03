@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/config"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform/safeerr"
 	identitymigrations "github.com/DoMinhHHung/bridgeworks/service/identity-service/migrations"
 	"github.com/pressly/goose/v3"
 
@@ -43,7 +44,7 @@ func run(parent context.Context, args []string) error {
 
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
-		return errors.New("open migration database")
+		return safeerr.Wrap("open migration database", err)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
@@ -52,10 +53,10 @@ func run(parent context.Context, args []string) error {
 	}()
 
 	if err := db.PingContext(ctx); err != nil {
-		return errors.New("ping migration database")
+		return safeerr.Wrap("ping migration database", err)
 	}
 	if _, err := db.ExecContext(ctx, "create schema if not exists app"); err != nil {
-		return errors.New("ensure migration schema")
+		return safeerr.Wrap("ensure migration schema", err)
 	}
 
 	provider, err := goose.NewProvider(
@@ -66,20 +67,20 @@ func run(parent context.Context, args []string) error {
 		goose.WithSlog(logger),
 	)
 	if err != nil {
-		return errors.New("initialize migration provider")
+		return safeerr.Wrap("initialize migration provider", err)
 	}
 
 	switch command {
 	case "up":
 		results, err := provider.Up(ctx)
 		if err != nil {
-			return errors.New("apply identity migrations")
+			return safeerr.Wrap("apply identity migrations", err)
 		}
 		logger.Info("identity migrations applied", "count", len(results))
 	case "status":
 		statuses, err := provider.Status(ctx)
 		if err != nil {
-			return errors.New("read identity migration status")
+			return safeerr.Wrap("read identity migration status", err)
 		}
 		for _, status := range statuses {
 			logger.Info(
@@ -93,7 +94,7 @@ func run(parent context.Context, args []string) error {
 	case "version":
 		version, err := provider.GetDBVersion(ctx)
 		if err != nil {
-			return errors.New("read identity migration version")
+			return safeerr.Wrap("read identity migration version", err)
 		}
 		logger.Info("identity migration version", "version", version)
 	default:
