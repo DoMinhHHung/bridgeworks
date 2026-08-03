@@ -108,12 +108,12 @@ func TestCurrentUserEnforcesLifecycleAndFailureContracts(t *testing.T) {
 
 	const rawDatabaseError = "pgx: postgres://runtime:secret@identity-postgres:5432/bridgeworks"
 	tests := []struct {
-		name       string
-		getError   error
-		wantStatus int
-		wantCode   string
+		name        string
+		getError    error
+		wantStatus  int
+		wantCode    string
 		wantMessage string
-		wantRetry  string
+		wantRetry   string
 	}{
 		{name: "disabled", getError: currentuser.ErrAccountDisabled, wantStatus: http.StatusForbidden, wantCode: "account_disabled", wantMessage: "account is disabled"},
 		{name: "deleted", getError: currentuser.ErrAccountDeleted, wantStatus: http.StatusForbidden, wantCode: "account_deleted", wantMessage: "account is deleted"},
