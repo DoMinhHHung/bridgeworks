@@ -91,6 +91,8 @@ func TestReadinessTimeoutReturnsServiceUnavailable(t *testing.T) {
 		}),
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 
 	request := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
@@ -138,6 +140,8 @@ func newTestRouter(checker ReadinessChecker) http.Handler {
 		},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		checker,
+		nil,
+		nil,
 		nil,
 		nil,
 	)
