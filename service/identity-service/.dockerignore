@@ -3,5 +3,4 @@
 .env
 coverage.out
 README.md
-migrations
 api

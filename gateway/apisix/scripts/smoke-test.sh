@@ -39,10 +39,10 @@ for attempt in $(seq 1 "${max_attempts}"); do
     exit 0
   fi
 
-  echo "Waiting for APISIX and identity-service (${attempt}/${max_attempts})..."
+  echo "Waiting for APISIX, identity-service, and PostgreSQL readiness (${attempt}/${max_attempts})..."
   sleep "${sleep_seconds}"
 done
 
 echo "APISIX or identity-service smoke test failed." >&2
-docker compose logs --no-color apisix identity-service >&2 || true
+docker compose logs --no-color apisix identity-service identity-postgres >&2 || true
 exit 1

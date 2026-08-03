@@ -13,7 +13,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/identity-service \
-    ./cmd/identity-service
+    ./cmd/identity-service && \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/identity-migrate \
+    ./cmd/identity-migrate
 
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates && \
@@ -21,6 +26,7 @@ RUN apk add --no-cache ca-certificates && \
     adduser -S -D -H -u 65532 -G nonroot nonroot
 
 COPY --from=build --chown=nonroot:nonroot /out/identity-service /usr/local/bin/identity-service
+COPY --from=build --chown=nonroot:nonroot /out/identity-migrate /usr/local/bin/identity-migrate
 
 USER nonroot:nonroot
 EXPOSE 8080

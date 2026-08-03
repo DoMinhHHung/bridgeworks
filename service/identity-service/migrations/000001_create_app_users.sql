@@ -63,6 +63,7 @@ comment on table app.clerk_webhook_events is
 create index clerk_webhook_events_user_occurred_idx
     on app.clerk_webhook_events (clerk_user_id, occurred_at desc);
 
+-- +goose StatementBegin
 create or replace function app.set_updated_at()
 returns trigger
 language plpgsql
@@ -74,6 +75,7 @@ begin
     return new;
 end;
 $$;
+-- +goose StatementEnd
 
 create trigger app_users_set_updated_at
 before update on app.app_users
