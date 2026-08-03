@@ -68,9 +68,14 @@ jobs:
           postgres_id="$(docker compose ps -q identity-postgres)"
           test "$(docker inspect --format '{{.State.Health.Status}}' "${postgres_id}")" = "healthy"
 
+          postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
+          postgres_db="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_DB=//p')"
+          test -n "${postgres_user}"
+          test -n "${postgres_db}"
+
           docker compose exec -T identity-postgres psql \
-            --username "${IDENTITY_POSTGRES_USER}" \
-            --dbname "${IDENTITY_POSTGRES_DB}" \
+            --username "${postgres_user}" \
+            --dbname "${postgres_db}" \
             --set ON_ERROR_STOP=1 \
             --tuples-only \
             --command "
