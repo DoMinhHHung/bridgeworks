@@ -11,10 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/clerkwebhook"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/config"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/httpapi"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/identityid"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/postgres"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/store"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
 )
 
 func main() {
@@ -30,7 +34,6 @@ func run(bootstrapLogger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-
 	logger := platform.NewLogger(os.Stdout, cfg.LogLevel).With("service", cfg.ServiceName)
 	slog.SetDefault(logger)
 
@@ -51,13 +54,33 @@ func run(bootstrapLogger *slog.Logger) error {
 	}
 	defer database.Close()
 
+	verifier, err := clerkwebhook.NewVerifier(cfg.ClerkWebhookSigningSecret)
+	if err != nil {
+		return err
+	}
+	idUserGenerator, err := identityid.New(time.Now, nil)
+	if err != nil {
+		return fmt.Errorf("initialize id_user generator: %w", err)
+	}
+	userSynchronizer := usersync.New(
+		store.New(database),
+		identityid.UUIDV7Generator{},
+		idUserGenerator,
+	)
+
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.NewRouter(
-			cfg.ServiceName,
+			httpapi.RouterConfig{
+				ServiceName:                cfg.ServiceName,
+				ReadinessTimeout:           cfg.DatabaseReadinessTimeout,
+				ClerkWebhookProcessTimeout: cfg.ClerkWebhookProcessTimeout,
+				ClerkWebhookMaxBodyBytes:   cfg.ClerkWebhookMaxBodyBytes,
+			},
 			logger,
 			database,
-			cfg.DatabaseReadinessTimeout,
+			verifier,
+			userSynchronizer,
 		),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
@@ -84,7 +107,6 @@ func run(bootstrapLogger *slog.Logger) error {
 
 	shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-
 	if err := server.Shutdown(shutdownContext); err != nil {
 		_ = server.Close()
 		return fmt.Errorf("shutdown HTTP server: %w", err)
@@ -98,7 +120,6 @@ func run(bootstrapLogger *slog.Logger) error {
 	case <-time.After(cfg.ShutdownTimeout):
 		return errors.New("http server did not stop before shutdown timeout")
 	}
-
 	logger.Info("http server stopped")
 	return nil
 }
