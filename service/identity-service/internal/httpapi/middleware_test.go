@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -70,5 +72,36 @@ func TestRequestIDReplacesInvalidHeader(t *testing.T) {
 
 	if got := response.Header().Get(requestIDHeader); got == "invalid request id" || got == "" {
 		t.Fatalf("invalid request ID was not replaced: %q", got)
+	}
+}
+
+func TestRecovererDoesNotLogRawPanicValue(t *testing.T) {
+	t.Parallel()
+
+	const secretPanicValue = "secret-token-must-not-be-logged"
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	handler := RequestID(Recoverer(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(secretPanicValue)
+	})))
+
+	request := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	request.Header.Set(requestIDHeader, "panic-request-id")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if bytes.Contains(logs.Bytes(), []byte(secretPanicValue)) {
+		t.Fatalf("raw panic value leaked into logs: %s", logs.String())
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(`"panic_type":"string"`)) {
+		t.Fatalf("panic type missing from logs: %s", logs.String())
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(`"request_id":"panic-request-id"`)) {
+		t.Fatalf("request ID missing from logs: %s", logs.String())
 	}
 }

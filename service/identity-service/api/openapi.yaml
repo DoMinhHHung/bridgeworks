@@ -3,8 +3,6 @@ info:
   title: BridgeWorks Identity Service API
   version: 0.1.0
   description: Runtime health endpoints exposed through APISIX.
-servers:
-  - url: http://127.0.0.1:9080
 paths:
   /api/v1/identity/health/live:
     get:

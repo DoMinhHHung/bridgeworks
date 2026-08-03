@@ -32,7 +32,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build and start stack
+      - name: Verify gateway independently
+        run: |
+          docker compose down --remove-orphans
+          docker compose up -d apisix
+          curl --retry 30 --retry-all-errors --retry-delay 2 \
+            --fail --show-error --silent \
+            http://127.0.0.1:9080/healthz
+
+      - name: Build and start full stack
         run: docker compose up -d --build
 
       - name: Test APISIX and identity-service
@@ -40,10 +48,10 @@ jobs:
 
       - name: Curl identity health routes
         run: |
-          curl --fail --show-error --silent \
+          curl --fail --show-error --silent --include \
             --header 'X-Request-Id: ci-live-request-id' \
             http://127.0.0.1:9080/api/v1/identity/health/live
-          curl --fail --show-error --silent \
+          curl --fail --show-error --silent --include \
             --header 'X-Request-Id: ci-ready-request-id' \
             http://127.0.0.1:9080/api/v1/identity/health/ready
 
@@ -53,7 +61,7 @@ jobs:
 
       - name: Stop containers
         if: always()
-        run: make gateway-down
+        run: docker compose down --remove-orphans
 
   go-services:
     name: Go services
@@ -66,7 +74,7 @@ jobs:
         id: modules
         shell: bash
         run: |
-          if compgen -G "services/*/go.mod" > /dev/null; then
+          if compgen -G "service/*/go.mod" > /dev/null; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -93,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for module_file in services/*/go.mod; do
+          for module_file in service/*/go.mod; do
             service_dir="$(dirname "${module_file}")"
             echo "::group::${service_dir}"
 

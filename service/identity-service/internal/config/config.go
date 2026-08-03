@@ -132,10 +132,16 @@ func logLevelValue(lookup lookupEnvFunc, key, fallback string) (slog.Level, erro
 		return 0, fmt.Errorf("%s must not be empty", key)
 	}
 
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(raw)); err != nil {
-		return 0, fmt.Errorf("%s must be one of debug, info, warn, error: %w", key, err)
+	switch strings.ToLower(raw) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("%s must be one of debug, info, warn, error", key)
 	}
-
-	return level, nil
 }

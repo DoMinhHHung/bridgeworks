@@ -32,13 +32,14 @@ Migration `migrations/000001_create_app_users.sql` là locked contract và khôn
 | `LOG_LEVEL` | `info` |
 
 Duration phải dùng Go duration syntax và phải lớn hơn zero. `LOG_LEVEL` chỉ
-nhận `debug`, `info`, `warn`, `error`. Config sai làm process fail ngay lúc
-startup.
+nhận chính xác `debug`, `info`, `warn`, `error` theo kiểu case-insensitive; các
+level offset như `INFO+2` hoặc `ERROR-8` bị reject. Config sai làm process fail
+ngay lúc startup.
 
 ## Run service locally
 
 ```bash
-cd services/identity
+cd service/identity-service
 cp .env.example .env
 set -a
 source .env
@@ -59,7 +60,7 @@ From repository root:
 
 ```bash
 cp -n .env.example .env
-docker compose up -d --build
+make stack-up
 make gateway-smoke
 ```
 
@@ -85,24 +86,44 @@ docker compose config --quiet
 Service module:
 
 ```bash
-cd services/identity
+cd service/identity-service
 unformatted="$(find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
 test -z "${unformatted}" || { printf '%s\n' "${unformatted}"; exit 1; }
 go mod tidy -diff
 go vet ./...
-go test -race ./...
+go test -race -coverprofile=coverage.out ./...
 golangci-lint run ./...
+```
+
+Gateway-independent verification:
+
+```bash
+docker compose down --remove-orphans
+make gateway-up
+curl --fail --show-error --silent http://127.0.0.1:9080/healthz
 ```
 
 Full container verification:
 
 ```bash
-docker compose up -d --build
+make stack-up
+docker compose ps
 make gateway-smoke
-curl -i http://127.0.0.1:9080/api/v1/identity/health/live
-curl -i http://127.0.0.1:9080/api/v1/identity/health/ready
-docker compose down --remove-orphans
+curl -i -H 'X-Request-Id: verify-live-request-id' \
+  http://127.0.0.1:9080/api/v1/identity/health/live
+curl -i -H 'X-Request-Id: verify-ready-request-id' \
+  http://127.0.0.1:9080/api/v1/identity/health/ready
+make stack-down
 ```
+
+## Compose targets
+
+- `make gateway-up`, `gateway-restart`, `gateway-logs`: chỉ tác động APISIX.
+- `make stack-up`, `stack-restart`, `stack-logs`: tác động APISIX và identity-service.
+- `make stack-down`: teardown toàn bộ Compose stack.
+
+APISIX không phụ thuộc lifecycle của identity-service; `/healthz` phải hoạt động
+ngay cả khi identity-service chưa start hoặc unhealthy.
 
 ## Health semantics
 

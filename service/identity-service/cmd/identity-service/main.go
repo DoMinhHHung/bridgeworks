@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/DoMinhHHung/bridgeworks/services/identity/internal/config"
-	"github.com/DoMinhHHung/bridgeworks/services/identity/internal/httpapi"
-	"github.com/DoMinhHHung/bridgeworks/services/identity/internal/platform"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/config"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/httpapi"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform"
 )
 
 func main() {
