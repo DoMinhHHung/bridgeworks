@@ -30,8 +30,8 @@ const (
 	maximumClerkWebhookProcessTimeout = 8 * time.Second
 	defaultClerkWebhookMaxBodyBytes   = int64(1_048_576)
 	maximumClerkWebhookMaxBodyBytes   = int64(5 * 1024 * 1024)
-	defaultClerkAuthLeeway             = 5 * time.Second
-	maximumClerkAuthLeeway             = 30 * time.Second
+	defaultClerkAuthLeeway            = 5 * time.Second
+	maximumClerkAuthLeeway            = 30 * time.Second
 	defaultMigrationTimeout           = time.Minute
 )
 
