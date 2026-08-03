@@ -18,4 +18,38 @@ routes:
       type: roundrobin
       nodes:
         "127.0.0.1:1": 1
+
+  - id: bridgeworks-identity-live
+    name: bridgeworks-identity-live
+    uri: /api/v1/identity/health/live
+    methods:
+      - GET
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      proxy-rewrite:
+        uri: /health/live
+    upstream:
+      type: roundrobin
+      nodes:
+        "identity-service:8080": 1
+
+  - id: bridgeworks-identity-ready
+    name: bridgeworks-identity-ready
+    uri: /api/v1/identity/health/ready
+    methods:
+      - GET
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      proxy-rewrite:
+        uri: /health/ready
+    upstream:
+      type: roundrobin
+      nodes:
+        "identity-service:8080": 1
 #END
