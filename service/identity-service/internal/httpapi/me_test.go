@@ -201,6 +201,10 @@ func assertCurrentUserError(
 	}
 }
 
+func stringPointer(value string) *string {
+	return &value
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
