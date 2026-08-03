@@ -2,7 +2,7 @@
 select
     id,
     clerk_user_id,
-    primary_email::text as primary_email,
+    primary_email,
     id_user,
     status,
     created_at,
