@@ -18,8 +18,8 @@ services:
     expose:
       - "8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/live >/dev/null || exit 1"]
-      interval: 5s
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/ready >/dev/null || exit 1"]
+      interval: 15s
       timeout: 3s
       retries: 10
       start_period: 5s
@@ -29,9 +29,6 @@ services:
   apisix:
     image: apache/apisix:3.17.0-debian
     restart: unless-stopped
-    depends_on:
-      identity-service:
-        condition: service_healthy
     ports:
       - "${APISIX_HTTP_PORT:-9080}:9080"
     volumes:
