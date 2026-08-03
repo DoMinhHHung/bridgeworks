@@ -77,16 +77,16 @@ func (s *Service) Process(ctx context.Context, event clerkwebhook.Event) error {
 	}
 	defer rollback(transaction, ctx)
 
-	if err := transaction.LockClerkUser(ctx, event.ClerkUserID); err != nil {
-		return err
-	}
-
 	inserted, err := transaction.InsertInboxEvent(ctx, event)
 	if err != nil {
 		return err
 	}
 	if !inserted {
 		return transaction.Commit(ctx)
+	}
+
+	if err := transaction.LockClerkUser(ctx, event.ClerkUserID); err != nil {
+		return err
 	}
 
 	stale, err := transaction.HasSupersedingEvent(ctx, event)
