@@ -33,6 +33,7 @@ services:
       - bridgeworks
 
   identity-migrate:
+    image: bridgeworks-identity-service:local
     build:
       context: ./service/identity-service
       dockerfile: Dockerfile
@@ -54,6 +55,7 @@ services:
       - bridgeworks
 
   identity-service:
+    image: bridgeworks-identity-service:local
     build:
       context: ./service/identity-service
       dockerfile: Dockerfile
