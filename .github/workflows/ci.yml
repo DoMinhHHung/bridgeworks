@@ -43,17 +43,35 @@ jobs:
       - name: Build and start full stack
         run: docker compose up -d --build
 
+      - name: Inspect full stack
+        run: |
+          docker compose ps
+          if docker compose port identity-service 8080 >/dev/null 2>&1; then
+            echo "identity-service must not publish port 8080" >&2
+            exit 1
+          fi
+
       - name: Test APISIX and identity-service
         run: make gateway-smoke
 
       - name: Curl identity health routes
+        shell: bash
         run: |
-          curl --fail --show-error --silent --include \
-            --header 'X-Request-Id: ci-live-request-id' \
-            http://127.0.0.1:9080/api/v1/identity/health/live
-          curl --fail --show-error --silent --include \
-            --header 'X-Request-Id: ci-ready-request-id' \
-            http://127.0.0.1:9080/api/v1/identity/health/ready
+          set -euo pipefail
+
+          live_response="$(curl --fail --show-error --silent -i \
+            -H 'X-Request-Id: verify-live-request-id' \
+            http://127.0.0.1:9080/api/v1/identity/health/live)"
+          printf '%s\n' "${live_response}"
+          grep --quiet --ignore-case '^X-Request-Id: verify-live-request-id' \
+            <<< "${live_response//$'\r'/}"
+
+          ready_response="$(curl --fail --show-error --silent -i \
+            -H 'X-Request-Id: verify-ready-request-id' \
+            http://127.0.0.1:9080/api/v1/identity/health/ready)"
+          printf '%s\n' "${ready_response}"
+          grep --quiet --ignore-case '^X-Request-Id: verify-ready-request-id' \
+            <<< "${ready_response//$'\r'/}"
 
       - name: Print container logs on failure
         if: failure()
