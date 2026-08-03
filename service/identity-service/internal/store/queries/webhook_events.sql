@@ -12,7 +12,7 @@ with inserted as (
         sqlc.arg(event_id),
         sqlc.arg(event_type),
         sqlc.arg(clerk_user_id),
-        sqlc.arg(occurred_at)
+        sqlc.arg(occurred_at)::timestamptz
     )
     on conflict (event_id) do nothing
     returning true as inserted
@@ -26,23 +26,23 @@ select exists (
     where clerk_user_id = sqlc.arg(clerk_user_id)
       and event_id <> sqlc.arg(event_id)
       and (
-          occurred_at > sqlc.arg(occurred_at)
+          occurred_at > sqlc.arg(occurred_at)::timestamptz
           or (
-              occurred_at = sqlc.arg(occurred_at)
+              occurred_at = sqlc.arg(occurred_at)::timestamptz
               and (
                   case event_type
                       when 'user.deleted' then 3
                       when 'user.updated' then 2
                       when 'user.created' then 1
                       else 0
-                  end > sqlc.arg(event_rank)
+                  end > sqlc.arg(event_rank)::integer
                   or (
                       case event_type
                           when 'user.deleted' then 3
                           when 'user.updated' then 2
                           when 'user.created' then 1
                           else 0
-                      end = sqlc.arg(event_rank)
+                      end = sqlc.arg(event_rank)::integer
                       and event_id > sqlc.arg(event_id)
                   )
               )
