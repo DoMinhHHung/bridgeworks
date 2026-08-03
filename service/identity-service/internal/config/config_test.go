@@ -52,7 +52,7 @@ func TestLoadOverrides(t *testing.T) {
 		"HTTP_ADDR":                     "127.0.0.1:9090",
 		"HTTP_READ_HEADER_TIMEOUT":      "1s",
 		"HTTP_READ_TIMEOUT":             "2s",
-		"HTTP_WRITE_TIMEOUT":            "3s",
+		"HTTP_WRITE_TIMEOUT":            "9s",
 		"HTTP_IDLE_TIMEOUT":             "4s",
 		"SHUTDOWN_TIMEOUT":              "5s",
 		"LOG_LEVEL":                     "DEBUG",
@@ -73,7 +73,7 @@ func TestLoadOverrides(t *testing.T) {
 
 	if cfg.ServiceName != "identity-test" || cfg.HTTPAddr != "127.0.0.1:9090" ||
 		cfg.ReadHeaderTimeout != time.Second || cfg.ReadTimeout != 2*time.Second ||
-		cfg.WriteTimeout != 3*time.Second || cfg.IdleTimeout != 4*time.Second ||
+		cfg.WriteTimeout != 9*time.Second || cfg.IdleTimeout != 4*time.Second ||
 		cfg.ShutdownTimeout != 5*time.Second || cfg.LogLevel != slog.LevelDebug {
 		t.Fatalf("unexpected runtime config: %+v", cfg)
 	}
@@ -86,6 +86,68 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ClerkWebhookSigningSecret != "whsec_override" ||
 		cfg.ClerkWebhookProcessTimeout != 8*time.Second || cfg.ClerkWebhookMaxBodyBytes != 2048 {
 		t.Fatalf("unexpected webhook config: %+v", cfg)
+	}
+}
+
+func TestLoadClerkWebhookProcessTimeoutInvariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		overrides map[string]string
+		want      time.Duration
+		wantError string
+	}{
+		{
+			name: "default five seconds is valid",
+			want: 5 * time.Second,
+		},
+		{
+			name:      "maximum eight seconds is valid",
+			overrides: map[string]string{"CLERK_WEBHOOK_PROCESS_TIMEOUT": "8s"},
+			want:      8 * time.Second,
+		},
+		{
+			name:      "nine seconds exceeds maximum",
+			overrides: map[string]string{"CLERK_WEBHOOK_PROCESS_TIMEOUT": "9s"},
+			wantError: "CLERK_WEBHOOK_PROCESS_TIMEOUT must be less than or equal to 8s",
+		},
+		{
+			name: "process timeout equals HTTP write timeout",
+			overrides: map[string]string{
+				"CLERK_WEBHOOK_PROCESS_TIMEOUT": "8s",
+				"HTTP_WRITE_TIMEOUT":            "8s",
+			},
+			wantError: "CLERK_WEBHOOK_PROCESS_TIMEOUT must be less than HTTP_WRITE_TIMEOUT",
+		},
+		{
+			name: "process timeout exceeds HTTP write timeout",
+			overrides: map[string]string{
+				"CLERK_WEBHOOK_PROCESS_TIMEOUT": "8s",
+				"HTTP_WRITE_TIMEOUT":            "7s",
+			},
+			wantError: "CLERK_WEBHOOK_PROCESS_TIMEOUT must be less than HTTP_WRITE_TIMEOUT",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := load(mapLookup(runtimeEnv(tt.overrides)))
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("error = %q, want substring %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if cfg.ClerkWebhookProcessTimeout != tt.want {
+				t.Fatalf("ClerkWebhookProcessTimeout = %s, want %s", cfg.ClerkWebhookProcessTimeout, tt.want)
+			}
+		})
 	}
 }
 
