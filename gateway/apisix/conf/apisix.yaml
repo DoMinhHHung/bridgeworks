@@ -60,4 +60,25 @@ routes:
         read: 2
       nodes:
         "identity-service:8080": 1
+
+  - id: bridgeworks-identity-clerk-webhook
+    name: bridgeworks-identity-clerk-webhook
+    uri: /api/v1/identity/webhooks/clerk
+    methods:
+      - POST
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      proxy-rewrite:
+        uri: /webhooks/clerk
+    upstream:
+      type: roundrobin
+      timeout:
+        connect: 1
+        send: 10
+        read: 10
+      nodes:
+        "identity-service:8080": 1
 #END
