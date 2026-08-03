@@ -32,19 +32,64 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Start APISIX
-        run: make gateway-up
+      - name: Verify gateway independently
+        run: |
+          docker compose down --remove-orphans
+          docker compose up -d apisix
+          curl --retry 30 --retry-all-errors --retry-delay 2 \
+            --fail --show-error --silent \
+            http://127.0.0.1:9080/healthz
 
-      - name: Test APISIX
+      - name: Build and start full stack
+        run: docker compose up -d --build
+
+      - name: Inspect full stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker compose ps
+
+          container_id="$(docker compose ps -q identity-service)"
+          port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
+          case "${port_bindings}" in
+            null|'{}')
+              ;;
+            *)
+              echo "identity-service must not publish port 8080: ${port_bindings}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Test APISIX and identity-service
         run: make gateway-smoke
 
-      - name: Print APISIX logs on failure
+      - name: Curl identity health routes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          live_response="$(curl --fail --show-error --silent -i \
+            -H 'X-Request-Id: verify-live-request-id' \
+            http://127.0.0.1:9080/api/v1/identity/health/live)"
+          printf '%s\n' "${live_response}"
+          grep --quiet --ignore-case '^X-Request-Id: verify-live-request-id' \
+            <<< "${live_response//$'\r'/}"
+
+          ready_response="$(curl --fail --show-error --silent -i \
+            -H 'X-Request-Id: verify-ready-request-id' \
+            http://127.0.0.1:9080/api/v1/identity/health/ready)"
+          printf '%s\n' "${ready_response}"
+          grep --quiet --ignore-case '^X-Request-Id: verify-ready-request-id' \
+            <<< "${ready_response//$'\r'/}"
+
+      - name: Print container logs on failure
         if: failure()
-        run: docker compose logs --no-color apisix
+        run: docker compose logs --no-color apisix identity-service
 
       - name: Stop containers
         if: always()
-        run: make gateway-down
+        run: docker compose down --remove-orphans
 
   go-services:
     name: Go services
@@ -61,7 +106,7 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No Go service modules yet; skipping Go checks."
+            echo "No Go service modules found; skipping Go checks."
           fi
 
       - name: Set up Go
