@@ -103,6 +103,11 @@ Exact `app_users_id_user_uq` collision được retry tối đa 5 lần; error k
 | `CLERK_WEBHOOK_PROCESS_TIMEOUT` | `5s` |
 | `CLERK_WEBHOOK_MAX_BODY_BYTES` | `1048576` |
 
+`CLERK_WEBHOOK_PROCESS_TIMEOUT` phải lớn hơn 0, không quá 8 giây và nhỏ hơn
+`HTTP_WRITE_TIMEOUT`. APISIX webhook `send`/`read` timeout được giữ cố định ở 10
+giây trong PR này, vì vậy webhook processing phải hoàn tất trước gateway timeout.
+Không cấu hình APISIX timeout qua environment trong PR này.
+
 Webhook max body phải lớn hơn 0 và không quá 5 MiB. Signing secret không được
 blank. Config errors không echo secret hoặc database URL.
 
