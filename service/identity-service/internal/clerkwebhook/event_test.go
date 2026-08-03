@@ -24,6 +24,20 @@ func TestVerifiedPrimaryEmailRules(t *testing.T) {
 			},
 			wanted: stringPointer("primary@example.test"),
 		},
+		{
+			name: "verified primary email is normalized",
+			user: userData{
+				PrimaryEmailAddressID: "email_primary",
+				EmailAddresses: []emailAddress{
+					{
+						ID:           "email_primary",
+						EmailAddress: "  developer@example.com  ",
+						Verification: emailVerification{Status: "verified"},
+					},
+				},
+			},
+			wanted: stringPointer("developer@example.com"),
+		},
 		{name: "primary ID missing", user: userData{EmailAddresses: verifiedEmails()}, wanted: nil},
 		{name: "matching email missing", user: userData{PrimaryEmailAddressID: "missing", EmailAddresses: verifiedEmails()}, wanted: nil},
 		{
