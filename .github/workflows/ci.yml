@@ -44,13 +44,22 @@ jobs:
         run: docker compose up -d --build
 
       - name: Inspect full stack
+        shell: bash
         run: |
+          set -euo pipefail
+
           docker compose ps
-          published_port="$(docker compose port identity-service 8080 2>/dev/null || true)"
-          if [[ -n "${published_port}" ]]; then
-            echo "identity-service must not publish port 8080: ${published_port}" >&2
-            exit 1
-          fi
+
+          container_id="$(docker compose ps -q identity-service)"
+          port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
+          case "${port_bindings}" in
+            null|'{}')
+              ;;
+            *)
+              echo "identity-service must not publish port 8080: ${port_bindings}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Test APISIX and identity-service
         run: make gateway-smoke
