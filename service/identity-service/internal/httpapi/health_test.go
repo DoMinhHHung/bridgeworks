@@ -44,13 +44,13 @@ func TestRouterErrorResponses(t *testing.T) {
 	handler := NewRouter("identity-service", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	tests := []struct {
-		name       string
-		method     string
-		path       string
-		status     int
-		code       string
-		message    string
-		requestID  string
+		name      string
+		method    string
+		path      string
+		status    int
+		code      string
+		message   string
+		requestID string
 	}{
 		{
 			name:      "not found",
