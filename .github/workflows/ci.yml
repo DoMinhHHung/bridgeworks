@@ -188,7 +188,7 @@ jobs:
             local request_id="$4"
             (
               cd service/identity-service
-              go run ../../../.github/scripts/clerk-webhook-client.go \
+              go run ../../.github/scripts/clerk-webhook-client.go \
                 -url "${webhook_url}" \
                 -secret "${CLERK_WEBHOOK_SIGNING_SECRET}" \
                 -event-id "${event_id}" \
