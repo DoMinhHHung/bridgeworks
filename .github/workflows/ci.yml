@@ -32,15 +32,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Start APISIX
+      - name: Start APISIX and identity-service
         run: make gateway-up
 
-      - name: Test APISIX
+      - name: Test APISIX and identity-service
         run: make gateway-smoke
 
-      - name: Print APISIX logs on failure
+      - name: Print container logs on failure
         if: failure()
-        run: docker compose logs --no-color apisix
+        run: docker compose logs --no-color apisix identity-service
 
       - name: Stop containers
         if: always()
@@ -57,11 +57,11 @@ jobs:
         id: modules
         shell: bash
         run: |
-          if compgen -G "service/*/go.mod" > /dev/null; then
+          if compgen -G "services/*/go.mod" > /dev/null; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No Go service modules yet; skipping Go checks."
+            echo "No Go service modules found; skipping Go checks."
           fi
 
       - name: Set up Go
@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for module_file in service/*/go.mod; do
+          for module_file in services/*/go.mod; do
             service_dir="$(dirname "${module_file}")"
             echo "::group::${service_dir}"
 
