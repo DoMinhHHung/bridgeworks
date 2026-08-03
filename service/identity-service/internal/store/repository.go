@@ -10,6 +10,7 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const idUserUniqueConstraint = "app_users_id_user_uq"
@@ -66,7 +67,10 @@ func (t *transaction) InsertInboxEvent(ctx context.Context, event clerkwebhook.E
 		EventID:     event.EventID,
 		EventType:   event.Type,
 		ClerkUserID: event.ClerkUserID,
-		OccurredAt:  event.OccurredAt,
+		OccurredAt: pgtype.Timestamptz{
+			Time:  event.OccurredAt.UTC(),
+			Valid: true,
+		},
 	})
 	if err != nil {
 		return false, safeerr.Wrap("insert Clerk webhook inbox event", err)
@@ -78,8 +82,11 @@ func (t *transaction) HasSupersedingEvent(ctx context.Context, event clerkwebhoo
 	hasSupersedingEvent, err := t.queries.HasSupersedingClerkWebhookEvent(ctx, sqlcgen.HasSupersedingClerkWebhookEventParams{
 		ClerkUserID: event.ClerkUserID,
 		EventID:     event.EventID,
-		OccurredAt:  event.OccurredAt,
-		EventRank:   eventRank(event.Type),
+		OccurredAt: pgtype.Timestamptz{
+			Time:  event.OccurredAt.UTC(),
+			Valid: true,
+		},
+		EventRank: eventRank(event.Type),
 	})
 	if err != nil {
 		return false, safeerr.Wrap("check Clerk webhook event ordering", err)
