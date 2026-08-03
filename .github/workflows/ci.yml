@@ -32,11 +32,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Start APISIX and identity-service
-        run: make gateway-up
+      - name: Build and start stack
+        run: docker compose up -d --build
 
       - name: Test APISIX and identity-service
         run: make gateway-smoke
+
+      - name: Curl identity health routes
+        run: |
+          curl --fail --show-error --silent \
+            --header 'X-Request-Id: ci-live-request-id' \
+            http://127.0.0.1:9080/api/v1/identity/health/live
+          curl --fail --show-error --silent \
+            --header 'X-Request-Id: ci-ready-request-id' \
+            http://127.0.0.1:9080/api/v1/identity/health/ready
 
       - name: Print container logs on failure
         if: failure()
