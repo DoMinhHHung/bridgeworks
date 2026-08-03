@@ -7,7 +7,8 @@ package sqlcgen
 
 import (
 	"context"
-	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const hasSupersedingClerkWebhookEvent = `-- name: HasSupersedingClerkWebhookEvent :one
@@ -45,7 +46,7 @@ select exists (
 type HasSupersedingClerkWebhookEventParams struct {
 	ClerkUserID string
 	EventID     string
-	OccurredAt  time.Time
+	OccurredAt  pgtype.Timestamptz
 	EventRank   int32
 }
 
@@ -56,9 +57,9 @@ func (q *Queries) HasSupersedingClerkWebhookEvent(ctx context.Context, arg HasSu
 		arg.OccurredAt,
 		arg.EventRank,
 	)
-	var hasSupersedingEvent bool
-	err := row.Scan(&hasSupersedingEvent)
-	return hasSupersedingEvent, err
+	var has_superseding_event bool
+	err := row.Scan(&has_superseding_event)
+	return has_superseding_event, err
 }
 
 const insertClerkWebhookEvent = `-- name: InsertClerkWebhookEvent :one
@@ -72,7 +73,7 @@ with inserted as (
         $1,
         $2,
         $3,
-        $4
+        $4::timestamptz
     )
     on conflict (event_id) do nothing
     returning true as inserted
@@ -84,7 +85,7 @@ type InsertClerkWebhookEventParams struct {
 	EventID     string
 	EventType   string
 	ClerkUserID string
-	OccurredAt  time.Time
+	OccurredAt  pgtype.Timestamptz
 }
 
 func (q *Queries) InsertClerkWebhookEvent(ctx context.Context, arg InsertClerkWebhookEventParams) (bool, error) {
