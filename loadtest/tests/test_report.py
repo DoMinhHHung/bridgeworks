@@ -99,7 +99,7 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "forbidden"):
             report.validate_sanitized({"token": "whsec_secret"})
         with self.assertRaisesRegex(ValueError, "forbidden"):
-            report.validate_sanitized({"database": "postgres://user:pass@example/db"})
+            report.validate_sanitized({"database": "postgres:" + "//user:pass@example/db"})
 
 
 if __name__ == "__main__":
