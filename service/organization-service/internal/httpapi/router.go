@@ -30,7 +30,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 
 	router.Get("/health/live", Liveness(dependencies.ServiceName))
 	router.Get("/health/ready", Readiness(dependencies.ServiceName, dependencies.Readiness, dependencies.ReadinessTimeout))
-	router.Post("/webhooks/clerk", ClerkWebhook(
+	router.Post("/webhooks/clerk", ClerkWebhookWithMetrics(
 		dependencies.WebhookVerifier,
 		dependencies.WebhookProcessor,
 		dependencies.Metrics,
