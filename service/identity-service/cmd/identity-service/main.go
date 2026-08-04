@@ -30,6 +30,13 @@ type serveResult struct {
 	err  error
 }
 
+type shutdownServer interface {
+	Shutdown(context.Context) error
+	Close() error
+}
+
+var _ httpapi.ClerkWebhookOutcomeProcessor = (*usersync.Service)(nil)
+
 func main() {
 	bootstrapLogger := platform.NewLogger(os.Stdout, slog.LevelInfo)
 	if err := run(bootstrapLogger); err != nil {
@@ -65,7 +72,12 @@ func run(bootstrapLogger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	cleanupDatabase := true
+	defer func() {
+		if cleanupDatabase {
+			database.Close()
+		}
+	}()
 
 	metrics, err := observability.New(cfg.ServiceName, func() observability.PoolStat {
 		return database.Stat()
@@ -166,22 +178,45 @@ func run(bootstrapLogger *slog.Logger) error {
 
 	shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	if err := metricsServer.Shutdown(shutdownContext); err != nil {
-		_ = metricsServer.Close()
-		if serveErr == nil {
-			serveErr = fmt.Errorf("shutdown metrics HTTP server: %w", err)
-		}
-	}
-	if err := server.Shutdown(shutdownContext); err != nil {
-		_ = server.Close()
-		if serveErr == nil {
-			serveErr = fmt.Errorf("shutdown application HTTP server: %w", err)
-		}
-	}
+	shutdownErr := shutdownRuntime(shutdownContext, metricsServer, server, database.Close)
+	cleanupDatabase = false
 	if serveErr != nil {
 		return serveErr
 	}
+	if shutdownErr != nil {
+		return shutdownErr
+	}
 	logger.Info("http servers stopped")
+	return nil
+}
+
+func shutdownRuntime(
+	ctx context.Context,
+	metricsServer shutdownServer,
+	applicationServer shutdownServer,
+	closeDatabase func(),
+) error {
+	var result error
+	if err := shutdownHTTPServer(ctx, "metrics", metricsServer); err != nil {
+		result = err
+	}
+	if err := shutdownHTTPServer(ctx, "application", applicationServer); err != nil && result == nil {
+		result = err
+	}
+	if closeDatabase != nil {
+		closeDatabase()
+	}
+	return result
+}
+
+func shutdownHTTPServer(ctx context.Context, name string, server shutdownServer) error {
+	if server == nil {
+		return nil
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		_ = server.Close()
+		return fmt.Errorf("shutdown %s HTTP server: %w", name, err)
+	}
 	return nil
 }
 
