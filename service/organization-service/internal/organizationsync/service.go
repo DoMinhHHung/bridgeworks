@@ -9,6 +9,14 @@ import (
 	"github.com/google/uuid"
 )
 
+type Result string
+
+const (
+	ResultProcessed Result = "processed"
+	ResultDuplicate Result = "duplicate"
+	ResultStale     Result = "stale"
+)
+
 type Service struct {
 	factory   UnitOfWorkFactory
 	generator organizationid.Generator
@@ -18,10 +26,15 @@ func New(factory UnitOfWorkFactory, generator organizationid.Generator) *Service
 	return &Service{factory: factory, generator: generator}
 }
 
-func (s *Service) Process(ctx context.Context, event Event) (err error) {
+func (s *Service) Process(ctx context.Context, event Event) error {
+	_, err := s.ProcessWithResult(ctx, event)
+	return err
+}
+
+func (s *Service) ProcessWithResult(ctx context.Context, event Event) (result Result, err error) {
 	uow, err := s.factory.Begin(ctx)
 	if err != nil {
-		return safeerr.Wrap("begin organization synchronization transaction", err)
+		return "", safeerr.Wrap("begin organization synchronization transaction", err)
 	}
 	committed := false
 	defer func() {
@@ -32,29 +45,29 @@ func (s *Service) Process(ctx context.Context, event Event) (err error) {
 
 	inserted, err := uow.InsertInbox(ctx, event)
 	if err != nil {
-		return safeerr.Wrap("insert organization webhook inbox event", err)
+		return "", safeerr.Wrap("insert organization webhook inbox event", err)
 	}
 	if !inserted {
 		if err := uow.Commit(ctx); err != nil {
-			return safeerr.Wrap("commit duplicate organization event", err)
+			return "", safeerr.Wrap("commit duplicate organization event", err)
 		}
 		committed = true
-		return nil
+		return ResultDuplicate, nil
 	}
 
 	if err := uow.AcquireOrganizationLock(ctx, event.ClerkOrganizationID); err != nil {
-		return safeerr.Wrap("acquire organization advisory lock", err)
+		return "", safeerr.Wrap("acquire organization advisory lock", err)
 	}
 	latest, found, err := uow.LatestAggregateEvent(ctx, event.AggregateType, event.AggregateID, event.EventID)
 	if err != nil {
-		return safeerr.Wrap("load latest organization aggregate event", err)
+		return "", safeerr.Wrap("load latest organization aggregate event", err)
 	}
 	if found && IsStale(event, latest) {
 		if err := uow.Commit(ctx); err != nil {
-			return safeerr.Wrap("commit stale organization event", err)
+			return "", safeerr.Wrap("commit stale organization event", err)
 		}
 		committed = true
-		return nil
+		return ResultStale, nil
 	}
 
 	switch event.AggregateType {
@@ -66,13 +79,13 @@ func (s *Service) Process(ctx context.Context, event Event) (err error) {
 		err = safeerr.New("unsupported organization aggregate type")
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := uow.Commit(ctx); err != nil {
-		return safeerr.Wrap("commit organization synchronization transaction", err)
+		return "", safeerr.Wrap("commit organization synchronization transaction", err)
 	}
 	committed = true
-	return nil
+	return ResultProcessed, nil
 }
 
 func (s *Service) applyOrganizationEvent(ctx context.Context, uow UnitOfWork, event Event) error {
