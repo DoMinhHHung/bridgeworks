@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/clerkwebhook"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/observability"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
 )
 
 type ClerkWebhookVerifier interface {
@@ -19,10 +21,15 @@ type ClerkWebhookProcessor interface {
 	Process(context.Context, clerkwebhook.Event) error
 }
 
+type clerkWebhookOutcomeProcessor interface {
+	ProcessWithResult(context.Context, clerkwebhook.Event) (usersync.Result, error)
+}
+
 func clerkWebhookHandler(
 	logger *slog.Logger,
 	verifier ClerkWebhookVerifier,
 	processor ClerkWebhookProcessor,
+	metrics Metrics,
 	maxBodyBytes int64,
 	processTimeout time.Duration,
 ) http.HandlerFunc {
@@ -30,6 +37,7 @@ func clerkWebhookHandler(
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		payload, err := io.ReadAll(r.Body)
 		if err != nil {
+			metricsObserveWebhook(metrics, observability.AggregateUser, observability.OutcomeRejected)
 			var maxBytesError *http.MaxBytesError
 			if errors.As(err, &maxBytesError) {
 				logger.WarnContext(
@@ -54,6 +62,7 @@ func clerkWebhookHandler(
 
 		event, err := verifier.VerifyAndParse(payload, r.Header)
 		if err != nil {
+			metricsObserveWebhook(metrics, observability.AggregateUser, observability.OutcomeRejected)
 			logger.WarnContext(
 				r.Context(),
 				"Clerk webhook rejected",
@@ -71,7 +80,14 @@ func clerkWebhookHandler(
 		processContext, cancel := context.WithTimeout(r.Context(), processTimeout)
 		defer cancel()
 
-		if err := processor.Process(processContext, event); err != nil {
+		result := usersync.ResultProcessed
+		if outcomeProcessor, ok := processor.(clerkWebhookOutcomeProcessor); ok {
+			result, err = outcomeProcessor.ProcessWithResult(processContext, event)
+		} else {
+			err = processor.Process(processContext, event)
+		}
+		if err != nil {
+			metricsObserveWebhook(metrics, observability.AggregateUser, observability.OutcomeRetryableFailure)
 			logger.ErrorContext(
 				r.Context(),
 				"Clerk webhook processing failed",
@@ -82,6 +98,13 @@ func clerkWebhookHandler(
 			return
 		}
 
+		metricsObserveWebhook(metrics, observability.AggregateUser, string(result))
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func metricsObserveWebhook(metrics Metrics, aggregate, outcome string) {
+	if metrics != nil {
+		metrics.ObserveWebhook(aggregate, outcome)
 	}
 }
