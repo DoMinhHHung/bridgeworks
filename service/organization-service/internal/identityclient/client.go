@@ -45,7 +45,9 @@ func New(rawURL string, timeout time.Duration) (*Client, error) {
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		// This request forwards the user's Bearer token to a configured private
+		// dependency. Ambient HTTP proxy variables must not redirect that token.
+		Proxy: nil,
 		DialContext: (&net.Dialer{
 			Timeout:   min(timeout, time.Second),
 			KeepAlive: 30 * time.Second,
