@@ -9,10 +9,10 @@ import (
 
 type fakePoolStat struct{}
 
-func (fakePoolStat) AcquiredConns() int32          { return 2 }
-func (fakePoolStat) IdleConns() int32              { return 3 }
-func (fakePoolStat) TotalConns() int32             { return 5 }
-func (fakePoolStat) MaxConns() int32               { return 7 }
+func (fakePoolStat) AcquiredConns() int32           { return 2 }
+func (fakePoolStat) IdleConns() int32               { return 3 }
+func (fakePoolStat) TotalConns() int32              { return 5 }
+func (fakePoolStat) MaxConns() int32                { return 7 }
 func (fakePoolStat) AcquireCount() int64            { return 11 }
 func (fakePoolStat) AcquireDuration() time.Duration { return 1500 * time.Millisecond }
 func (fakePoolStat) EmptyAcquireCount() int64       { return 4 }

@@ -39,11 +39,11 @@ type PoolStat interface {
 }
 
 type Metrics struct {
-	service string
-	registry *prometheus.Registry
-	httpRequests *prometheus.CounterVec
-	httpDuration *prometheus.HistogramVec
-	httpInFlight *prometheus.GaugeVec
+	service       string
+	registry      *prometheus.Registry
+	httpRequests  *prometheus.CounterVec
+	httpDuration  *prometheus.HistogramVec
+	httpInFlight  *prometheus.GaugeVec
 	webhookEvents *prometheus.CounterVec
 }
 
@@ -53,15 +53,15 @@ func New(service string, poolStat func() PoolStat) (*Metrics, error) {
 	}
 
 	metrics := &Metrics{
-		service: service,
+		service:  service,
 		registry: prometheus.NewRegistry(),
 		httpRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "http_requests_total",
 			Help: "Completed HTTP requests grouped by bounded route, method, and status class.",
 		}, []string{"service", "route", "method", "status_class"}),
 		httpDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name: "http_request_duration_seconds",
-			Help: "HTTP request duration grouped by bounded route and method.",
+			Name:    "http_request_duration_seconds",
+			Help:    "HTTP request duration grouped by bounded route and method.",
 			Buckets: httpLatencyBuckets,
 		}, []string{"service", "route", "method"}),
 		httpInFlight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -150,32 +150,32 @@ func boundedOutcome(value string) bool {
 }
 
 type poolCollector struct {
-	service string
-	pool string
-	stat func() PoolStat
-	acquired *prometheus.Desc
-	idle *prometheus.Desc
-	total *prometheus.Desc
-	max *prometheus.Desc
-	acquireCount *prometheus.Desc
-	acquireDuration *prometheus.Desc
-	emptyAcquireCount *prometheus.Desc
+	service              string
+	pool                 string
+	stat                 func() PoolStat
+	acquired             *prometheus.Desc
+	idle                 *prometheus.Desc
+	total                *prometheus.Desc
+	max                  *prometheus.Desc
+	acquireCount         *prometheus.Desc
+	acquireDuration      *prometheus.Desc
+	emptyAcquireCount    *prometheus.Desc
 	canceledAcquireCount *prometheus.Desc
 }
 
 func newPoolCollector(service, pool string, stat func() PoolStat) *poolCollector {
 	labels := []string{"service", "pool"}
 	return &poolCollector{
-		service: service,
-		pool: pool,
-		stat: stat,
-		acquired: prometheus.NewDesc("database_pool_acquired_connections", "Currently acquired PostgreSQL pool connections.", labels, nil),
-		idle: prometheus.NewDesc("database_pool_idle_connections", "Currently idle PostgreSQL pool connections.", labels, nil),
-		total: prometheus.NewDesc("database_pool_total_connections", "Current total PostgreSQL pool connections.", labels, nil),
-		max: prometheus.NewDesc("database_pool_max_connections", "Configured PostgreSQL pool maximum connections.", labels, nil),
-		acquireCount: prometheus.NewDesc("database_pool_acquire_count_total", "Total successful PostgreSQL pool acquisitions.", labels, nil),
-		acquireDuration: prometheus.NewDesc("database_pool_acquire_duration_seconds_total", "Cumulative PostgreSQL pool acquisition wait duration.", labels, nil),
-		emptyAcquireCount: prometheus.NewDesc("database_pool_empty_acquire_count_total", "Total PostgreSQL acquisitions that waited for an empty pool.", labels, nil),
+		service:              service,
+		pool:                 pool,
+		stat:                 stat,
+		acquired:             prometheus.NewDesc("database_pool_acquired_connections", "Currently acquired PostgreSQL pool connections.", labels, nil),
+		idle:                 prometheus.NewDesc("database_pool_idle_connections", "Currently idle PostgreSQL pool connections.", labels, nil),
+		total:                prometheus.NewDesc("database_pool_total_connections", "Current total PostgreSQL pool connections.", labels, nil),
+		max:                  prometheus.NewDesc("database_pool_max_connections", "Configured PostgreSQL pool maximum connections.", labels, nil),
+		acquireCount:         prometheus.NewDesc("database_pool_acquire_count_total", "Total successful PostgreSQL pool acquisitions.", labels, nil),
+		acquireDuration:      prometheus.NewDesc("database_pool_acquire_duration_seconds_total", "Cumulative PostgreSQL pool acquisition wait duration.", labels, nil),
+		emptyAcquireCount:    prometheus.NewDesc("database_pool_empty_acquire_count_total", "Total PostgreSQL acquisitions that waited for an empty pool.", labels, nil),
 		canceledAcquireCount: prometheus.NewDesc("database_pool_canceled_acquire_count_total", "Total canceled PostgreSQL pool acquisitions.", labels, nil),
 	}
 }

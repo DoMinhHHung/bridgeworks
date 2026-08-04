@@ -7,10 +7,10 @@ import (
 
 func TestLoadMetricsAddr(t *testing.T) {
 	tests := []struct {
-		name string
-		env map[string]string
-		httpAddr string
-		want string
+		name      string
+		env       map[string]string
+		httpAddr  string
+		want      string
 		wantError string
 	}{
 		{name: "default", env: map[string]string{}, httpAddr: ":8080", want: ":9090"},
@@ -24,10 +24,14 @@ func TestLoadMetricsAddr(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := loadMetricsAddr(mapLookup(tt.env), tt.httpAddr)
 			if tt.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantError) { t.Fatalf("error = %v", err) }
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("error = %v", err)
+				}
 				return
 			}
-			if err != nil || got != tt.want { t.Fatalf("got %q, err %v", got, err) }
+			if err != nil || got != tt.want {
+				t.Fatalf("got %q, err %v", got, err)
+			}
 		})
 	}
 }

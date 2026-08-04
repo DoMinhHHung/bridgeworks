@@ -16,9 +16,9 @@ import (
 )
 
 type observedRequest struct {
-	route string
-	method string
-	status int
+	route    string
+	method   string
+	status   int
 	duration time.Duration
 }
 
@@ -28,7 +28,7 @@ type fakeMetrics struct {
 	webhooks [][2]string
 }
 
-func (m *fakeMetrics) HTTPRequestStarted() { m.inFlight++ }
+func (m *fakeMetrics) HTTPRequestStarted()   { m.inFlight++ }
 func (m *fakeMetrics) HTTPRequestCompleted() { m.inFlight-- }
 func (m *fakeMetrics) ObserveHTTPRequest(route, method string, status int, duration time.Duration) {
 	m.observed = append(m.observed, observedRequest{route: route, method: method, status: status, duration: duration})
@@ -55,10 +55,10 @@ func TestHTTPObservabilityCapturesBoundedCompletionRecords(t *testing.T) {
 	router.Get("/panic/{id}", func(http.ResponseWriter, *http.Request) { panic("boom") })
 
 	tests := []struct {
-		path string
+		path   string
 		status int
-		bytes int64
-		route string
+		bytes  int64
+		route  string
 	}{
 		{path: "/items/provider-secret?token=jwt-secret", status: 204, route: "/items/{id}"},
 		{path: "/default/provider-secret?token=jwt-secret", status: 200, bytes: 5, route: "/default/{id}"},
@@ -102,17 +102,29 @@ func TestHTTPObservabilityCapturesBoundedCompletionRecords(t *testing.T) {
 type optionalWriter struct{ *httptest.ResponseRecorder }
 
 func (w optionalWriter) Flush() {}
-func (w optionalWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, http.ErrNotSupported }
+func (w optionalWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, http.ErrNotSupported
+}
 func (w optionalWriter) Push(string, *http.PushOptions) error { return http.ErrNotSupported }
-func (w optionalWriter) ReadFrom(reader io.Reader) (int64, error) { return io.Copy(w.ResponseRecorder, reader) }
+func (w optionalWriter) ReadFrom(reader io.Reader) (int64, error) {
+	return io.Copy(w.ResponseRecorder, reader)
+}
 
 func TestHTTPObservabilityPreservesOptionalResponseWriterInterfaces(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil)).With("service", "identity-service")
 	handler := HTTPObservability(logger, &fakeMetrics{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if _, ok := w.(http.Flusher); !ok { t.Fatal("http.Flusher lost") }
-		if _, ok := w.(http.Hijacker); !ok { t.Fatal("http.Hijacker lost") }
-		if _, ok := w.(http.Pusher); !ok { t.Fatal("http.Pusher lost") }
-		if _, ok := w.(io.ReaderFrom); !ok { t.Fatal("io.ReaderFrom lost") }
+		if _, ok := w.(http.Flusher); !ok {
+			t.Fatal("http.Flusher lost")
+		}
+		if _, ok := w.(http.Hijacker); !ok {
+			t.Fatal("http.Hijacker lost")
+		}
+		if _, ok := w.(http.Pusher); !ok {
+			t.Fatal("http.Pusher lost")
+		}
+		if _, ok := w.(io.ReaderFrom); !ok {
+			t.Fatal("io.ReaderFrom lost")
+		}
 	}))
 	handler.ServeHTTP(optionalWriter{httptest.NewRecorder()}, httptest.NewRequest(http.MethodGet, "/", nil))
 }

@@ -16,9 +16,9 @@ import (
 )
 
 type observedRequest struct {
-	route string
-	method string
-	status int
+	route    string
+	method   string
+	status   int
 	duration time.Duration
 }
 
@@ -28,7 +28,7 @@ type fakeMetrics struct {
 	webhooks [][2]string
 }
 
-func (m *fakeMetrics) HTTPRequestStarted() { m.inFlight++ }
+func (m *fakeMetrics) HTTPRequestStarted()   { m.inFlight++ }
 func (m *fakeMetrics) HTTPRequestCompleted() { m.inFlight-- }
 func (m *fakeMetrics) ObserveHTTPRequest(route, method string, status int, duration time.Duration) {
 	m.observed = append(m.observed, observedRequest{route: route, method: method, status: status, duration: duration})
@@ -50,7 +50,11 @@ func TestHTTPObservabilityCapturesBoundedCompletionRecords(t *testing.T) {
 	router.Get("/failure", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
 	router.Get("/panic/{id}", func(http.ResponseWriter, *http.Request) { panic("boom") })
 
-	tests := []struct { path string; status int; route string }{
+	tests := []struct {
+		path   string
+		status int
+		route  string
+	}{
 		{path: "/organizations/provider-secret?token=jwt-secret", status: 200, route: "/organizations/{id}"},
 		{path: "/no-content", status: 204, route: "/no-content"},
 		{path: "/failure", status: 503, route: "/failure"},
@@ -63,33 +67,56 @@ func TestHTTPObservabilityCapturesBoundedCompletionRecords(t *testing.T) {
 		request.Header.Set("X-Request-Id", "organization-request")
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, request)
-		if recorder.Code != tt.status { t.Fatalf("%s status = %d, want %d", tt.path, recorder.Code, tt.status) }
+		if recorder.Code != tt.status {
+			t.Fatalf("%s status = %d, want %d", tt.path, recorder.Code, tt.status)
+		}
 		got := metrics.observed[len(metrics.observed)-1]
-		if got.route != tt.route || got.status != tt.status { t.Fatalf("observed = %+v", got) }
+		if got.route != tt.route || got.status != tt.status {
+			t.Fatalf("observed = %+v", got)
+		}
 	}
-	if metrics.inFlight != 0 { t.Fatalf("in-flight = %d", metrics.inFlight) }
+	if metrics.inFlight != 0 {
+		t.Fatalf("in-flight = %d", metrics.inFlight)
+	}
 	output := logs.String()
 	for _, expected := range []string{"organization-service", "organization-request", "/organizations/{id}", "response_bytes"} {
-		if !strings.Contains(output, expected) { t.Fatalf("logs missing %q: %s", expected, output) }
+		if !strings.Contains(output, expected) {
+			t.Fatalf("logs missing %q: %s", expected, output)
+		}
 	}
 	for _, forbidden := range []string{"provider-secret", "jwt-secret", "webhook-body-secret", "token="} {
-		if strings.Contains(output, forbidden) { t.Fatalf("logs leaked %q: %s", forbidden, output) }
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("logs leaked %q: %s", forbidden, output)
+		}
 	}
 }
 
 type optionalWriter struct{ *httptest.ResponseRecorder }
+
 func (w optionalWriter) Flush() {}
-func (w optionalWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, http.ErrNotSupported }
+func (w optionalWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, http.ErrNotSupported
+}
 func (w optionalWriter) Push(string, *http.PushOptions) error { return http.ErrNotSupported }
-func (w optionalWriter) ReadFrom(reader io.Reader) (int64, error) { return io.Copy(w.ResponseRecorder, reader) }
+func (w optionalWriter) ReadFrom(reader io.Reader) (int64, error) {
+	return io.Copy(w.ResponseRecorder, reader)
+}
 
 func TestHTTPObservabilityPreservesOptionalResponseWriterInterfaces(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil)).With("service", "organization-service")
 	handler := HTTPObservability(logger, &fakeMetrics{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if _, ok := w.(http.Flusher); !ok { t.Fatal("http.Flusher lost") }
-		if _, ok := w.(http.Hijacker); !ok { t.Fatal("http.Hijacker lost") }
-		if _, ok := w.(http.Pusher); !ok { t.Fatal("http.Pusher lost") }
-		if _, ok := w.(io.ReaderFrom); !ok { t.Fatal("io.ReaderFrom lost") }
+		if _, ok := w.(http.Flusher); !ok {
+			t.Fatal("http.Flusher lost")
+		}
+		if _, ok := w.(http.Hijacker); !ok {
+			t.Fatal("http.Hijacker lost")
+		}
+		if _, ok := w.(http.Pusher); !ok {
+			t.Fatal("http.Pusher lost")
+		}
+		if _, ok := w.(io.ReaderFrom); !ok {
+			t.Fatal("io.ReaderFrom lost")
+		}
 	}))
 	handler.ServeHTTP(optionalWriter{httptest.NewRecorder()}, httptest.NewRequest(http.MethodGet, "/", nil))
 }
