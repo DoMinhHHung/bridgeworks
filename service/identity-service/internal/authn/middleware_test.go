@@ -245,6 +245,9 @@ func assertUnauthorized(t *testing.T, response *httptest.ResponseRecorder) {
 	if response.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("Content-Type = %q", response.Header().Get("Content-Type"))
 	}
+	if response.Header().Get("WWW-Authenticate") != wwwAuthenticateHeaderValue {
+		t.Fatalf("WWW-Authenticate = %q", response.Header().Get("WWW-Authenticate"))
+	}
 
 	var body errorEnvelope
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
