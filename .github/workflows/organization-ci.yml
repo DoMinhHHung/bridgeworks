@@ -21,13 +21,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Verify clean checkout and main ancestry
         shell: bash
         run: |
           set -euo pipefail
           test -z "$(git status --short)"
-          git fetch origin main --depth=1
           git merge-base --is-ancestor origin/main HEAD
 
       - name: Set up Go
