@@ -1,0 +1,272 @@
+name: Load Test and Capacity Baseline
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Bounded load profile
+        type: choice
+        required: true
+        default: baseline
+        options:
+          - smoke
+          - baseline
+          - burst
+          - saturation
+          - dependency-degradation
+      scenario:
+        description: One isolated traffic scenario
+        type: choice
+        required: true
+        default: identity_me
+        options:
+          - identity_me
+          - organization_current
+          - organization_membership
+          - organization_dependency
+          - identity_user_unique
+          - identity_user_retry
+          - organization_unique
+          - organization_retry
+          - membership_unique
+          - membership_retry
+      degradation_mode:
+        description: Used only by dependency-degradation
+        type: choice
+        required: true
+        default: identity-unavailable
+        options:
+          - identity-unavailable
+          - identity-delayed
+          - constrained-pool
+          - replica-restart
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-test-capacity-${{ github.ref }}-${{ inputs.profile || 'smoke' }}-${{ inputs.scenario || 'suite' }}
+  cancel-in-progress: true
+
+env:
+  LOADTEST_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  K6_IMAGE: grafana/k6:2.0.0
+  DELAY_PROXY_IMAGE: python:3.13.5-alpine3.22
+
+jobs:
+  validation:
+    name: Load-test harness and capacity validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Configure local environment
+        run: cp .env.example .env
+
+      - name: Verify repository, generated SQL, and Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          make repo-check
+          make identity-sqlc-check
+          make organization-sqlc-check
+          docker compose config --quiet
+
+      - name: Verify locked production configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code origin/main...HEAD -- \
+            service/identity-service/migrations/000001_create_app_users.sql
+          git diff --exit-code origin/main...HEAD -- \
+            service/organization-service/migrations/000001_create_organization_foundation.sql
+          git diff --exit-code origin/main...HEAD -- compose.yaml .env.example
+          test ! -f loadtest/go.mod
+          grep --quiet --fixed-strings 'grafana/k6:2.0.0' loadtest/scripts/harness.sh
+          grep --quiet --fixed-strings 'python:3.13.5-alpine3.22' loadtest/scripts/harness.sh
+          ! grep -R --line-number --fixed-strings 'DATABASE_MAX_CONNS=' loadtest docs/load-test-capacity-runbook.md \
+            | grep -v 'experimental' || false
+          ! grep -R --line-number --fixed-strings 'postgres://' loadtest
+
+      - name: Run deterministic unit and syntax tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s loadtest/tests -v
+          python3 -m py_compile \
+            loadtest/capacity.py \
+            loadtest/report.py \
+            loadtest/scripts/delay_proxy.py
+          node --check loadtest/k6/lib/common.js
+          node --check loadtest/k6/authenticated-read.js
+          node --check loadtest/k6/webhook.js
+          bash -n \
+            loadtest/scripts/harness.sh \
+            loadtest/scripts/run.sh \
+            loadtest/scripts/run-suite.sh
+
+      - name: Verify deterministic capacity calculator
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/capacity"
+          mkdir -p "${output}"
+          python3 loadtest/capacity.py \
+            --postgres-max-connections 100 \
+            --reserved-admin-connections 5 \
+            --reserved-migration-connections 5 \
+            --operational-headroom-connections 20 \
+            --identity-allocation 30 \
+            --identity-max-replicas 3 \
+            --organization-allocation 30 \
+            --organization-max-replicas 3 \
+            --output-json "${output}/capacity-budget.json" \
+            --output-markdown "${output}/capacity-budget.md"
+          python3 - "${output}/capacity-budget.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          value = json.loads(Path(sys.argv[1]).read_text())
+          assert value["identity"]["per_replica_max_connections"] == 10
+          assert value["organization"]["per_replica_max_connections"] == 10
+          PY
+
+  smoke:
+    name: Bounded PR smoke load suite
+    if: github.event_name == 'pull_request'
+    needs: validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Run isolated smoke scenarios
+        shell: bash
+        env:
+          LOADTEST_RESULTS_DIR: ${{ github.workspace }}/loadtest-results
+          LOAD_DURATION: 4s
+          LOAD_VUS: 2
+        run: bash loadtest/scripts/run-suite.sh smoke
+
+      - name: Verify sanitized result set
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find loadtest-results/smoke -name result.json -type f | wc -l)" = "9"
+          test "$(find loadtest-results/smoke -name result.md -type f | wc -l)" = "9"
+          test -f loadtest-results/capacity/capacity-budget.json
+          test -f loadtest-results/capacity/capacity-budget.md
+          ! grep -R --line-number --extended-regexp \
+            'whsec_|postgres(ql)?://|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(user|org|mem)_load_' \
+            loadtest-results
+
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-test-smoke-${{ github.run_id }}
+          path: |
+            loadtest-results/**/result.json
+            loadtest-results/**/result.md
+            loadtest-results/capacity/capacity-budget.json
+            loadtest-results/capacity/capacity-budget.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Deterministic cleanup
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker ps -aq --filter label=bridgeworks.loadtest=true | xargs -r docker rm --force
+          docker compose ls --format json | python3 -c \
+            'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))' \
+            | while read -r project; do
+                test -n "${project}" && docker compose -p "${project}" down --remove-orphans --volumes
+              done
+
+  manual-profile:
+    name: Manual ${{ inputs.profile }} — ${{ inputs.scenario }}
+    if: github.event_name == 'workflow_dispatch'
+    needs: validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Run selected isolated profile
+        shell: bash
+        env:
+          LOADTEST_RESULTS_DIR: ${{ github.workspace }}/loadtest-results
+        run: |
+          set -euo pipefail
+          degradation=none
+          if [[ "${{ inputs.profile }}" == "dependency-degradation" ]]; then
+            degradation="${{ inputs.degradation_mode }}"
+          fi
+          bash loadtest/scripts/run.sh \
+            "${{ inputs.profile }}" \
+            "${{ inputs.scenario }}" \
+            "${degradation}"
+
+      - name: Verify sanitized manual results
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "loadtest-results/${{ inputs.profile }}/${{ inputs.scenario }}/result.json"
+          test -f "loadtest-results/${{ inputs.profile }}/${{ inputs.scenario }}/result.md"
+          ! grep -R --line-number --extended-regexp \
+            'whsec_|postgres(ql)?://|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(user|org|mem)_load_' \
+            loadtest-results
+
+      - name: Upload manual profile results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-test-${{ inputs.profile }}-${{ inputs.scenario }}-${{ github.run_id }}
+          path: |
+            loadtest-results/**/result.json
+            loadtest-results/**/result.md
+            loadtest-results/capacity/capacity-budget.json
+            loadtest-results/capacity/capacity-budget.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Deterministic cleanup
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker ps -aq --filter label=bridgeworks.loadtest=true | xargs -r docker rm --force
+          docker compose ls --format json | python3 -c \
+            'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))' \
+            | while read -r project; do
+                test -n "${project}" && docker compose -p "${project}" down --remove-orphans --volumes
+              done

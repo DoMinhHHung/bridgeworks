@@ -28,6 +28,11 @@ go.work.sum
 .env
 !.env.example
 
+# Generated load-test output and Python caches
+/loadtest-results/
+__pycache__/
+*.pyc
+
 # Editor/IDE
 # .idea/
 # .vscode/
