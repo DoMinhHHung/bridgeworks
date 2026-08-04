@@ -13,11 +13,7 @@ RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at;
 UPDATE organization.organizations
 SET name = $2,
     slug = $3,
-    status = CASE
-        WHEN status = 'pending' THEN 'active'
-        WHEN status = 'active' THEN 'active'
-        ELSE status
-    END
+    status = $4
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at;
 
