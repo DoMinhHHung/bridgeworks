@@ -57,8 +57,9 @@ test "$(probe_status GET 'http://identity-service:9090/me')" = "404"
 test "$(probe_status GET 'http://organization-service:9090/organizations/current')" = "404"
 test "$(probe_status GET 'http://organization-service:9090/organizations/current/membership')" = "404"
 
-# Add an ephemeral CI-only APISIX route so a non-standard method reaches the
-# real Identity listener without changing the committed public route contract.
+# Add an ephemeral CI-only APISIX route without a method filter so a
+# non-standard HTTP token reaches the real Identity listener. The committed
+# public route contract remains unchanged and cleanup restores the file.
 python3 - "${apisix_config}" <<'PY'
 from pathlib import Path
 import sys
@@ -69,7 +70,6 @@ marker = "#END"
 route = """  - id: bridgeworks-observability-custom-method-probe
     name: bridgeworks-observability-custom-method-probe
     uri: /__observability/custom-method
-    methods: [X-CUSTOM-123]
     plugins:
       request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
       proxy-rewrite: { uri: /__observability/custom-method }
