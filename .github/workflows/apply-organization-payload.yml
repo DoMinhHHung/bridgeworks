@@ -25,7 +25,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/payloads/organization/chunk-* | base64 --decode > /tmp/organization-source.tgz
+          mkdir -p /tmp/organization-payload
+          for file in .github/payloads/organization/chunk-*; do
+            name="$(basename "${file}")"
+            printf '%s bytes=%s\n' "${name}" "$(wc -c < "${file}")"
+            if grep --line-number --extended-regexp '[^A-Za-z0-9+/=[:space:]]' "${file}"; then
+              echo "${name} contains non-base64 characters" >&2
+              exit 1
+            fi
+            base64 --decode "${file}" > "/tmp/organization-payload/${name}.bin"
+          done
+          cat /tmp/organization-payload/chunk-*.bin > /tmp/organization-source.tgz
           test "$(sha256sum /tmp/organization-source.tgz | awk '{print $1}')" = "e7b7ecec80880ffbd0bcfd0a0a5f2080f3c2dc5f6ae16d73816c647c8dd2078b"
           tar --extract --gzip --file /tmp/organization-source.tgz --directory .
           rm -rf .github/payloads/organization
