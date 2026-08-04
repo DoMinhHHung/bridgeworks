@@ -157,6 +157,11 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 	if err != nil {
 		return safeerr.Wrap("load membership for synchronization", err)
 	}
+	if found {
+		if err := validateMembershipOwnership(existing, organization.ID, event.Membership.ClerkUserID); err != nil {
+			return err
+		}
+	}
 
 	if event.Type == EventMembershipDeleted {
 		if !found {
@@ -248,8 +253,11 @@ func (s *Service) resolveClerkMembershipConflict(ctx context.Context, uow UnitOf
 	if err != nil {
 		return safeerr.Wrap("load membership after Clerk membership conflict", err)
 	}
-	if !found || existing.OrganizationID != intended.OrganizationID || existing.ClerkUserID != intended.ClerkUserID {
+	if !found {
 		return safeerr.New("inconsistent Clerk membership projection")
+	}
+	if err := validateMembershipOwnership(existing, intended.OrganizationID, intended.ClerkUserID); err != nil {
+		return err
 	}
 
 	if intended.Status == "deleted" {
@@ -269,6 +277,13 @@ func (s *Service) resolveClerkMembershipConflict(ctx context.Context, uow UnitOf
 	default:
 		return safeerr.New("unsupported membership status")
 	}
+}
+
+func validateMembershipOwnership(existing Membership, organizationID uuid.UUID, clerkUserID string) error {
+	if existing.OrganizationID != organizationID || existing.ClerkUserID != clerkUserID {
+		return safeerr.New("inconsistent Clerk membership projection")
+	}
+	return nil
 }
 
 func (s *Service) resolveActiveMembershipConflict(ctx context.Context, uow UnitOfWork, intended Membership) error {
