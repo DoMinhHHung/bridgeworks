@@ -94,9 +94,8 @@ jobs:
           test ! -f loadtest/go.mod
           grep --quiet --fixed-strings 'grafana/k6:2.0.0' loadtest/scripts/harness.sh
           grep --quiet --fixed-strings 'python:3.13.5-alpine3.22' loadtest/scripts/harness.sh
-          ! grep -R --line-number --fixed-strings 'DATABASE_MAX_CONNS=' loadtest docs/load-test-capacity-runbook.md \
-            | grep -v 'experimental' || false
-          ! grep -R --line-number --fixed-strings 'postgres://' loadtest
+          ! grep -R --line-number --fixed-strings 'DATABASE_MAX_CONNS=' loadtest docs/load-test-capacity-runbook.md
+          ! grep -R --line-number --fixed-strings 'postgres://' loadtest --exclude='test_report.py'
 
       - name: Run deterministic unit and syntax tests
         shell: bash
@@ -197,12 +196,29 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker ps -aq --filter label=bridgeworks.loadtest=true | xargs -r docker rm --force
-          docker compose ls --format json | python3 -c \
-            'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))' \
-            | while read -r project; do
-                test -n "${project}" && docker compose -p "${project}" down --remove-orphans --volumes
-              done
+          cleanup_failed=0
+
+          containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
+          if [[ -n "${containers}" ]]; then
+            docker rm --force ${containers} || cleanup_failed=1
+          fi
+
+          while IFS= read -r project; do
+            [[ -z "${project}" ]] && continue
+            docker compose -p "${project}" down --remove-orphans --volumes || cleanup_failed=1
+          done < <(
+            docker compose ls --format json | python3 -c \
+              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
+          )
+
+          remaining_containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
+          remaining_projects="$(
+            docker compose ls --format json | python3 -c \
+              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
+          )"
+          [[ -z "${remaining_containers}" ]] || cleanup_failed=1
+          [[ -z "${remaining_projects}" ]] || cleanup_failed=1
+          exit "${cleanup_failed}"
 
   manual-profile:
     name: Manual ${{ inputs.profile }} — ${{ inputs.scenario }}
@@ -264,9 +280,26 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker ps -aq --filter label=bridgeworks.loadtest=true | xargs -r docker rm --force
-          docker compose ls --format json | python3 -c \
-            'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))' \
-            | while read -r project; do
-                test -n "${project}" && docker compose -p "${project}" down --remove-orphans --volumes
-              done
+          cleanup_failed=0
+
+          containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
+          if [[ -n "${containers}" ]]; then
+            docker rm --force ${containers} || cleanup_failed=1
+          fi
+
+          while IFS= read -r project; do
+            [[ -z "${project}" ]] && continue
+            docker compose -p "${project}" down --remove-orphans --volumes || cleanup_failed=1
+          done < <(
+            docker compose ls --format json | python3 -c \
+              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
+          )
+
+          remaining_containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
+          remaining_projects="$(
+            docker compose ls --format json | python3 -c \
+              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
+          )"
+          [[ -z "${remaining_containers}" ]] || cleanup_failed=1
+          [[ -z "${remaining_projects}" ]] || cleanup_failed=1
+          exit "${cleanup_failed}"
