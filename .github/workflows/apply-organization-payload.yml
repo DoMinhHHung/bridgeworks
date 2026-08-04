@@ -1,9 +1,8 @@
 name: Apply Organization Source Payload
 
 on:
-  push:
-    branches:
-      - feat/organization-sync-authorization
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
