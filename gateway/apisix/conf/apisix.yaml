@@ -2,13 +2,9 @@ routes:
   - id: bridgeworks-gateway-health
     name: bridgeworks-gateway-health
     uri: /healthz
-    methods:
-      - GET
+    methods: [GET]
     plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
       mocking:
         response_status: 200
         content_type: application/json
@@ -16,83 +12,50 @@ routes:
         with_mock_header: true
     upstream:
       type: roundrobin
-      nodes:
-        "127.0.0.1:1": 1
+      nodes: { "127.0.0.1:1": 1 }
 
   - id: bridgeworks-identity-live
     name: bridgeworks-identity-live
     uri: /api/v1/identity/health/live
-    methods:
-      - GET
+    methods: [GET]
     plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
-      proxy-rewrite:
-        uri: /health/live
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /health/live }
     upstream:
       type: roundrobin
-      timeout:
-        connect: 1
-        send: 2
-        read: 2
-      nodes:
-        "identity-service:8080": 1
+      timeout: { connect: 1, send: 2, read: 2 }
+      nodes: { "identity-service:8080": 1 }
 
   - id: bridgeworks-identity-ready
     name: bridgeworks-identity-ready
     uri: /api/v1/identity/health/ready
-    methods:
-      - GET
+    methods: [GET]
     plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
-      proxy-rewrite:
-        uri: /health/ready
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /health/ready }
     upstream:
       type: roundrobin
-      timeout:
-        connect: 1
-        send: 2
-        read: 2
-      nodes:
-        "identity-service:8080": 1
+      timeout: { connect: 1, send: 2, read: 2 }
+      nodes: { "identity-service:8080": 1 }
 
   - id: bridgeworks-identity-clerk-webhook
     name: bridgeworks-identity-clerk-webhook
     uri: /api/v1/identity/webhooks/clerk
-    methods:
-      - POST
+    methods: [POST]
     plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
-      proxy-rewrite:
-        uri: /webhooks/clerk
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /webhooks/clerk }
     upstream:
       type: roundrobin
-      timeout:
-        connect: 1
-        send: 10
-        read: 10
-      nodes:
-        "identity-service:8080": 1
+      timeout: { connect: 1, send: 10, read: 10 }
+      nodes: { "identity-service:8080": 1 }
 
   - id: bridgeworks-identity-me
     name: bridgeworks-identity-me
     uri: /api/v1/me
-    methods:
-      - GET
-      - OPTIONS
+    methods: [GET, OPTIONS]
     plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
       cors:
         allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
         allow_methods: "GET,OPTIONS"
@@ -100,14 +63,83 @@ routes:
         expose_headers: "X-Request-Id,Retry-After"
         max_age: 600
         allow_credential: false
-      proxy-rewrite:
-        uri: /me
+      proxy-rewrite: { uri: /me }
     upstream:
       type: roundrobin
-      timeout:
-        connect: 1
-        send: 5
-        read: 5
-      nodes:
-        "identity-service:8080": 1
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "identity-service:8080": 1 }
+
+  - id: bridgeworks-organization-live
+    name: bridgeworks-organization-live
+    uri: /api/v1/organizations/health/live
+    methods: [GET]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /health/live }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 2, read: 2 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-ready
+    name: bridgeworks-organization-ready
+    uri: /api/v1/organizations/health/ready
+    methods: [GET]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /health/ready }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 2, read: 2 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-clerk-webhook
+    name: bridgeworks-organization-clerk-webhook
+    uri: /api/v1/organizations/webhooks/clerk
+    methods: [POST]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /webhooks/clerk }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 10, read: 10 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current
+    name: bridgeworks-organization-current
+    uri: /api/v1/organizations/current
+    methods: [GET, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /organizations/current }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current-membership
+    name: bridgeworks-organization-current-membership
+    uri: /api/v1/organizations/current/membership
+    methods: [GET, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /organizations/current/membership }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
 #END
