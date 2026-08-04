@@ -11,15 +11,15 @@ import (
 )
 
 const (
-	AggregateUser         = "user"
-	AggregateOrganization = "organization"
-	AggregateMembership   = "membership"
+	AggregateUser = "user"
 
 	OutcomeProcessed        = "processed"
 	OutcomeDuplicate        = "duplicate"
 	OutcomeStale            = "stale"
 	OutcomeRejected         = "rejected"
 	OutcomeRetryableFailure = "retryable_failure"
+
+	methodOther = "OTHER"
 )
 
 var httpLatencyBuckets = []float64{
@@ -116,6 +116,7 @@ func (m *Metrics) ObserveHTTPRequest(route, method string, status int, duration 
 	if route == "" {
 		route = "unknown"
 	}
+	method = normalizeHTTPMethod(method)
 	statusClass := strconv.Itoa(status/100) + "xx"
 	if status < 100 || status > 599 {
 		statusClass = "5xx"
@@ -124,20 +125,28 @@ func (m *Metrics) ObserveHTTPRequest(route, method string, status int, duration 
 	m.httpDuration.WithLabelValues(m.service, route, method).Observe(duration.Seconds())
 }
 
+func normalizeHTTPMethod(method string) string {
+	switch method {
+	case http.MethodGet,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodHead,
+		http.MethodOptions,
+		http.MethodConnect,
+		http.MethodTrace:
+		return method
+	default:
+		return methodOther
+	}
+}
+
 func (m *Metrics) ObserveWebhook(aggregate, outcome string) {
-	if m == nil || !boundedAggregate(aggregate) || !boundedOutcome(outcome) {
+	if m == nil || aggregate != AggregateUser || !boundedOutcome(outcome) {
 		return
 	}
 	m.webhookEvents.WithLabelValues(m.service, aggregate, outcome).Inc()
-}
-
-func boundedAggregate(value string) bool {
-	switch value {
-	case AggregateUser, AggregateOrganization, AggregateMembership:
-		return true
-	default:
-		return false
-	}
 }
 
 func boundedOutcome(value string) bool {
@@ -195,7 +204,6 @@ func (c *poolCollector) Collect(ch chan<- prometheus.Metric) {
 	if c == nil || c.stat == nil {
 		return
 	}
-	defer func() { _ = recover() }()
 	stat := c.stat()
 	if stat == nil {
 		return
