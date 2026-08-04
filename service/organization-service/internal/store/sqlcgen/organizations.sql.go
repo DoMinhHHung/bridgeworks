@@ -96,11 +96,7 @@ const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :one
 UPDATE organization.organizations
 SET name = $2,
     slug = $3,
-    status = CASE
-        WHEN status = 'pending' THEN 'active'
-        WHEN status = 'active' THEN 'active'
-        ELSE status
-    END
+    status = $4
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at
 `
@@ -109,10 +105,16 @@ type UpdateOrganizationProjectionParams struct {
 	ClerkOrganizationID string
 	Name                *string
 	Slug                *string
+	Status              string
 }
 
 func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (OrganizationOrganization, error) {
-	row := q.db.QueryRow(ctx, updateOrganizationProjection, arg.ClerkOrganizationID, arg.Name, arg.Slug)
+	row := q.db.QueryRow(ctx, updateOrganizationProjection,
+		arg.ClerkOrganizationID,
+		arg.Name,
+		arg.Slug,
+		arg.Status,
+	)
 	var i OrganizationOrganization
 	err := row.Scan(
 		&i.ID,
