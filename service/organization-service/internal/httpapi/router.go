@@ -15,7 +15,7 @@ type Dependencies struct {
 	Readiness        ReadinessChecker
 	ReadinessTimeout time.Duration
 	WebhookVerifier  WebhookVerifier
-	WebhookProcessor EventProcessor
+	WebhookProcessor EventOutcomeProcessor
 	WebhookMaxBytes  int64
 	WebhookTimeout   time.Duration
 	Authenticate     func(http.Handler) http.Handler
