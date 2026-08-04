@@ -93,13 +93,13 @@ func TestArbitraryHTTPMethodsCollapseToOther(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	arbitrary := []string{"X-CUSTOM-123", "BREW-456", "ATTACKER-METHOD"}
+	arbitrary := []string{"X-CUSTOM-123", "PURGE", "BREW-456", "ATTACKER-METHOD"}
 	for _, method := range arbitrary {
 		metrics.ObserveHTTPRequest("unknown", method, 404, time.Millisecond)
 	}
 
 	body := scrapeMetrics(t, metrics)
-	if !strings.Contains(body, `http_requests_total{method="OTHER",route="unknown",service="organization-service",status_class="4xx"} 3`) {
+	if !strings.Contains(body, `http_requests_total{method="OTHER",route="unknown",service="organization-service",status_class="4xx"} 4`) {
 		t.Fatalf("OTHER series missing: %s", body)
 	}
 	for _, method := range arbitrary {

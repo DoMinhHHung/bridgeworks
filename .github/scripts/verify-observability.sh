@@ -57,9 +57,10 @@ test "$(probe_status GET 'http://identity-service:9090/me')" = "404"
 test "$(probe_status GET 'http://organization-service:9090/organizations/current')" = "404"
 test "$(probe_status GET 'http://organization-service:9090/organizations/current/membership')" = "404"
 
-# Add an ephemeral CI-only APISIX route without a method filter so a
-# non-standard HTTP token reaches the real Identity listener. The committed
-# public route contract remains unchanged and cleanup restores the file.
+# Add an ephemeral CI-only APISIX route for the APISIX-supported PURGE
+# extension method. PURGE is intentionally outside the service metric allowlist,
+# so it must collapse to OTHER while the access log retains the raw method. The
+# committed public route contract remains unchanged and cleanup restores the file.
 python3 - "${apisix_config}" <<'PY'
 from pathlib import Path
 import sys
@@ -70,6 +71,7 @@ marker = "#END"
 route = """  - id: bridgeworks-observability-custom-method-probe
     name: bridgeworks-observability-custom-method-probe
     uri: /__observability/custom-method
+    methods: [PURGE]
     plugins:
       request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
       proxy-rewrite: { uri: /__observability/custom-method }
@@ -86,7 +88,7 @@ PY
 custom_method_status=''
 for _ in $(seq 1 30); do
   custom_method_status="$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' \
-    --request X-CUSTOM-123 -H 'X-Request-Id: obs-custom-method' \
+    --request PURGE -H 'X-Request-Id: obs-custom-method' \
     "${base_url}/__observability/custom-method")"
   if [ "${custom_method_status}" = "404" ]; then
     break
@@ -145,7 +147,7 @@ done
 
 grep --quiet 'route="/me"' "${identity_metrics}"
 grep --quiet 'method="OTHER",route="unknown"' "${identity_metrics}"
-! grep --quiet --fixed-strings 'X-CUSTOM-123' "${identity_metrics}"
+! grep --quiet --fixed-strings 'PURGE' "${identity_metrics}"
 grep --quiet 'aggregate="user",outcome="processed"' "${identity_metrics}"
 grep --quiet 'aggregate="user",outcome="duplicate"' "${identity_metrics}"
 grep --quiet 'aggregate="user",outcome="rejected"' "${identity_metrics}"
@@ -172,7 +174,7 @@ done
 for request_id in obs-organization-success obs-organization-current obs-organization-current-membership; do
   test "$(grep 'http request completed' "${organization_logs}" | grep -c "\"request_id\":\"${request_id}\"")" = "1"
 done
-grep 'http request completed' "${identity_logs}" | grep '"request_id":"obs-custom-method"' | grep --quiet '"method":"X-CUSTOM-123"'
+grep 'http request completed' "${identity_logs}" | grep '"request_id":"obs-custom-method"' | grep --quiet '"method":"PURGE"'
 grep 'http request completed' "${identity_logs}" | grep --quiet '"route":"/webhooks/clerk"'
 grep 'http request completed' "${organization_logs}" | grep --quiet '"route":"/organizations/current"'
 for secret in user_obs_metrics org_obs_metrics mem_obs_metrics observability@example.test; do
