@@ -12,6 +12,10 @@ class ProfileContractTests(unittest.TestCase):
         for profile in ("smoke", "baseline", "burst", "saturation", "dependency-degradation"):
             self.assertIn(f"'{profile}'", common)
         self.assertIn("abortOnFail: true", common)
+        self.assertIn(
+            "options.summaryTrendStats = ['min', 'med', 'p(50)', 'p(95)', 'p(99)', 'max'];",
+            common,
+        )
 
         authenticated = (ROOT / "k6/authenticated-read.js").read_text(encoding="utf-8")
         webhook = (ROOT / "k6/webhook.js").read_text(encoding="utf-8")
