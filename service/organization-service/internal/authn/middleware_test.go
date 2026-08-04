@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"crypto/rsa"
 	"io"
 	"log/slog"
 	"net/http"
