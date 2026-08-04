@@ -9,6 +9,6 @@ scenario="${2:-${LOAD_SCENARIO:-identity_me}}"
 degradation_mode="${3:-${DEGRADATION_MODE:-none}}"
 
 trap 'exit_code=$?; trap - EXIT; loadtest_cleanup "${exit_code}"; exit "${exit_code}"' EXIT
-loadtest_initialize "${profile}" "${degradation_mode}"
+loadtest_initialize "${profile}" "${scenario}" "${degradation_mode}"
 loadtest_run_scenario "${scenario}"
 loadtest_write_capacity_example
