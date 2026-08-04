@@ -12,9 +12,9 @@ const (
 	EventOrganizationCreated = "organization.created"
 	EventOrganizationUpdated = "organization.updated"
 	EventOrganizationDeleted = "organization.deleted"
-	EventMembershipCreated   = "organizationMembership.created"
-	EventMembershipUpdated   = "organizationMembership.updated"
-	EventMembershipDeleted   = "organizationMembership.deleted"
+	EventMembershipCreated   = "organization_membership.created"
+	EventMembershipUpdated   = "organization_membership.updated"
+	EventMembershipDeleted   = "organization_membership.deleted"
 
 	AggregateOrganization = "organization"
 	AggregateMembership   = "membership"
@@ -36,13 +36,16 @@ type Event struct {
 	Organization        OrganizationProjection
 	Membership          MembershipProjection
 }
+
 type OrganizationProjection struct {
 	Name *string
 	Slug *string
 }
+
 type MembershipProjection struct {
-	ClerkMembershipID, ClerkUserID string
-	ClerkRole                      *string
+	ClerkMembershipID string
+	ClerkUserID       string
+	ClerkRole         *string
 }
 
 type envelope struct {
@@ -50,11 +53,13 @@ type envelope struct {
 	Timestamp int64           `json:"timestamp"`
 	Data      json.RawMessage `json:"data"`
 }
+
 type organizationData struct {
 	ID   string  `json:"id"`
 	Name *string `json:"name"`
 	Slug *string `json:"slug"`
 }
+
 type membershipData struct {
 	ID           string `json:"id"`
 	Organization *struct {
@@ -91,7 +96,7 @@ func Decode(eventID string, payload []byte) (Event, bool, error) {
 		return Event{}, true, ErrInvalidEvent
 	}
 	event := Event{EventID: eventID, Type: raw.Type, OccurredAt: occurredAt}
-	if strings.HasPrefix(raw.Type, "organizationMembership.") {
+	if strings.HasPrefix(raw.Type, "organization_membership.") {
 		var data membershipData
 		if err := json.Unmarshal(raw.Data, &data); err != nil {
 			return Event{}, true, ErrInvalidEvent
@@ -108,7 +113,11 @@ func Decode(eventID string, payload []byte) (Event, bool, error) {
 		event.AggregateType = AggregateMembership
 		event.AggregateID = membershipID
 		event.ClerkOrganizationID = organizationID
-		event.Membership = MembershipProjection{ClerkMembershipID: membershipID, ClerkUserID: userID, ClerkRole: normalizeOptional(data.Role)}
+		event.Membership = MembershipProjection{
+			ClerkMembershipID: membershipID,
+			ClerkUserID:       userID,
+			ClerkRole:         normalizeOptional(data.Role),
+		}
 		return event, true, nil
 	}
 	var data organizationData
@@ -135,6 +144,7 @@ func Supported(eventType string) bool {
 		return false
 	}
 }
+
 func EventRank(eventType string) int {
 	switch eventType {
 	case EventOrganizationDeleted, EventMembershipDeleted:
@@ -147,6 +157,7 @@ func EventRank(eventType string) int {
 		return 0
 	}
 }
+
 func IsStale(incoming Event, latest Event) bool {
 	if latest.EventID == "" {
 		return false
@@ -166,12 +177,14 @@ func IsStale(incoming Event, latest Event) bool {
 	}
 	return incoming.EventID <= latest.EventID
 }
+
 func InitialApplicationRole(clerkRole *string) string {
 	if clerkRole != nil && *clerkRole == ClerkRoleAdmin {
 		return RoleAdmin
 	}
 	return RoleViewer
 }
+
 func normalizeOptional(value *string) *string {
 	if value == nil {
 		return nil
