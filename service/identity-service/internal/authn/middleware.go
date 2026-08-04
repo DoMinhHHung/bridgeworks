@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	unauthorizedCode    = "unauthorized"
-	unauthorizedMessage = "authentication required"
+	unauthorizedCode           = "unauthorized"
+	unauthorizedMessage        = "authentication required"
+	wwwAuthenticateHeaderValue = `Bearer realm="bridgeworks"`
 )
 
 type Principal struct {
@@ -177,6 +178,7 @@ func bearerToken(value string) (string, bool) {
 
 func writeUnauthorized(w http.ResponseWriter, _ *http.Request, requestID string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", wwwAuthenticateHeaderValue)
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(errorEnvelope{
 		Code:      unauthorizedCode,
