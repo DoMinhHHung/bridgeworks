@@ -1,77 +1,58 @@
-# organization-service
+# Organization Service
 
-Organization Service owns BridgeWorks organization and membership authorization projections. It is independently deployable, uses its own PostgreSQL schema and never reads or mutates Identity Service tables.
+Organization Service owns the BridgeWorks projection and authorization boundary for Clerk organizations and memberships.
 
-## Ownership
+It does not own user identity, passwords, sessions, talent, jobs, applications, organization verification, billing, invitations, or profile data.
+
+## Runtime
+
+- Go 1.26.5
+- `net/http` and `chi`
+- `pgx/v5`
+- `sqlc`
+- Goose
+- `log/slog`
+- Clerk Go SDK
+- Svix webhook verification
+- PostgreSQL schema `organization`
+
+## Public APISIX paths
+
+```text
+GET  /api/v1/organizations/health/live
+GET  /api/v1/organizations/health/ready
+POST /api/v1/organizations/webhooks/clerk
+GET  /api/v1/organizations/current
+GET  /api/v1/organizations/current/membership
+```
+
+The service port is private to the Docker network. APISIX is the only host-published HTTP entry point.
+
+## Ownership boundary
 
 Organization Service owns:
 
-- immutable Clerk organization mapping;
-- organization lifecycle projection `pending|active|disabled|deleted`;
-- Clerk organization-membership projection;
-- BridgeWorks-owned `application_role` on each membership;
-- local roles, permissions and effective authorization decisions;
-- organization-scoped `ActorContext`;
-- transactional Clerk organization webhook inbox.
+- Clerk organization mapping and lifecycle projection;
+- Clerk membership projection;
+- BridgeWorks application role assigned to each membership;
+- local role-to-permission mapping;
+- tenant-scoped `ActorContext` construction;
+- organization authorization decisions;
+- Clerk organization/membership webhook inbox.
 
-Identity Service continues to own Clerk user mapping, internal user UUID, public `id_user`, account lifecycle, primary-email projection, user webhooks and authenticated `/api/v1/me`.
+Identity Service remains authoritative for:
 
-Organization Service does not own passwords, sessions, email verification, profile/talent data, jobs, applications, billing or legal organization verification. There is no cross-service foreign key and no import from `service/identity-service/internal/...`.
+- Clerk user mapping;
+- local Identity UUID;
+- public `id_user`;
+- local account status;
+- authenticated `/api/v1/me`.
 
-## Database boundary
+Organization Service never queries the Identity database, imports no Identity `internal` package, and creates no cross-service foreign key.
 
-The service owns PostgreSQL schema `organization` and Goose table `organization.goose_db_version`.
+## Clerk webhook contract
 
-Tables:
-
-- `organization.organizations`
-- `organization.roles`
-- `organization.permissions`
-- `organization.role_permissions`
-- `organization.memberships`
-- `organization.clerk_webhook_events`
-
-The runtime role should have only runtime DML privileges. The one-shot migration runner uses `MIGRATION_DATABASE_URL`. Service startup never runs migrations.
-
-Organization IDs and membership IDs are generated in Go with `github.com/google/uuid.NewV7`. Existing IDs never change on update or delete.
-
-## Organization lifecycle
-
-- `pending`: placeholder created when a membership event arrives before the organization event. It is never authorizable.
-- `active`: Clerk organization projection has synchronized. This does not mean legally verified.
-- `disabled`: BridgeWorks-owned suspension. Clerk updates may refresh name/slug but cannot re-enable it.
-- `deleted`: Clerk deletion tombstone. Name/slug are cleared and later Clerk updates cannot restore it.
-
-Legal/company verification is intentionally out of scope.
-
-## Membership and role authority
-
-Memberships are provider projections keyed by immutable Clerk membership ID and preserve tombstones. A deleted membership is never reactivated. Rejoin requires a new Clerk membership ID. A partial unique index allows only one active membership per `(organization_id, clerk_user_id)` while preserving historical tombstones.
-
-`clerk_role` is informational projection only. `application_role` is BridgeWorks authorization authority:
-
-- exact Clerk default admin role `org:admin` initializes local `admin`;
-- every other role initializes local `viewer`;
-- later membership updates may change `clerk_role` but never overwrite `application_role`.
-
-JWT `org_role` and `org_permissions` claims are not trusted for final authorization.
-
-Seeded local permissions:
-
-```text
-admin  → organization.read, organization.manage, membership.read, membership.manage
-viewer → organization.read
-```
-
-## Clerk webhook synchronization
-
-Public endpoint:
-
-```text
-POST /api/v1/organizations/webhooks/clerk
-```
-
-Exact supported current Clerk webhook event names:
+Supported event names are exact:
 
 ```text
 organization.created
@@ -82,129 +63,123 @@ organizationMembership.updated
 organizationMembership.deleted
 ```
 
-Raw request bytes are read once, bounded, verified by the official Svix library, and only then decoded into a narrow DTO. The service never persists raw payloads, webhook headers, signatures, email, names of users, images or full public-user data.
+The membership decoder reads only:
 
-Each supported event executes in one PostgreSQL transaction:
+- membership ID;
+- nested organization ID;
+- `public_user_data.user_id`;
+- Clerk role.
 
-1. insert inbox row with `ON CONFLICT DO NOTHING`;
-2. duplicate delivery commits without taking an advisory lock or mutating data;
-3. acquire a transaction-level advisory lock keyed by Clerk organization ID;
-4. load the latest event for the incoming aggregate stream;
-5. retain stale inbox rows but skip aggregate mutation;
-6. apply projection mutation;
-7. commit before returning `204`.
+It does not persist email, name, username, avatar, phone, or metadata.
 
-Ordering within one aggregate stream is deterministic:
-
-1. newer `occurred_at` wins;
-2. equal timestamp: delete > update > create;
-3. equal timestamp and type: lexically greater event ID wins.
-
-Organization and membership aggregates have separate ordering streams. A rollback also removes the inbox insert so Clerk retry can process it again.
-
-## Authentication and ActorContext
-
-Authenticated browser flow:
+The initial application-role mapping is:
 
 ```text
-Clerk Bearer token
-→ official Clerk Go SDK verification
-→ active organization claim selects the tenant projection
-→ private Identity Service GET /me using the same Bearer token
-→ active local organization
-→ active membership scoped by organization ID + verified Clerk user ID
-→ local application role and permissions
-→ immutable ActorContext
+org:admin -> admin
+all other Clerk roles -> viewer
 ```
 
-The narrow principal contains only Clerk user ID, session ID and active Clerk organization ID. The resulting actor context contains local Identity UUID, local organization UUID, local membership UUID, role and a private permission set.
+After initialization, local `application_role` is authoritative. Clerk webhook updates and JWT role/permission claims do not overwrite it.
 
-Organization Service calls `http://identity-service:8080/me` directly on the private Docker network and forwards only `Authorization` and `X-Request-Id`. It does not call APISIX internally, does not retry automatically and bounds response size and time.
+## Transaction and ordering model
 
-## Public API
+`organizationsync.Service` owns the complete synchronization use case:
+
+1. begin the unit of work;
+2. insert the transactional inbox row;
+3. commit duplicates before advisory locking;
+4. acquire an organization-scoped transaction advisory lock;
+5. load the latest competing event for the exact aggregate;
+6. classify stale events by timestamp, delete > update > create, then lexical event ID;
+7. decide organization or membership transitions;
+8. generate UUIDv7 identifiers;
+9. commit only after the projection mutation succeeds.
+
+The PostgreSQL adapter exposes only narrow sqlc-backed persistence operations and transaction control. It does not decide status transitions, event precedence, role initialization, deleted-entity reactivation, or UUID generation.
+
+Membership inserts run inside the transaction savepoint:
 
 ```text
-GET  /api/v1/organizations/health/live
-GET  /api/v1/organizations/health/ready
-POST /api/v1/organizations/webhooks/clerk
-GET  /api/v1/organizations/current
-GET  /api/v1/organizations/current/membership
+SAVEPOINT membership_insert
 ```
 
-Current organization returns only local `id`, nullable `name`, nullable `slug` and active status. Current membership returns only local IDs, local role and lexicographically sorted local permissions. Clerk IDs, Identity UUID, Clerk role and raw claims are never public.
+A failed insert is followed by `ROLLBACK TO SAVEPOINT membership_insert` and `RELEASE SAVEPOINT membership_insert` before any follow-up read. Only these exact unique constraints have recoverable conflict logic:
 
-All authenticated responses, including errors, set:
+```text
+memberships_clerk_membership_id_uq
+memberships_active_organization_user_uq
+```
+
+Any other `23505` remains an operational error and rolls back the outer transaction and inbox row.
+
+## Lifecycle semantics
+
+Organizations use:
+
+```text
+pending | active | disabled | deleted
+```
+
+- Membership-first delivery creates a `pending` organization placeholder.
+- Organization create/update promotes `pending` to `active`.
+- Provider updates preserve locally `disabled` organizations.
+- Deleted organizations never restore from later create/update events.
+- Delete events create tombstones when the projection is absent.
+
+Memberships use:
+
+```text
+active | deleted
+```
+
+- Deleted membership rows never reactivate.
+- Rejoin requires a new Clerk membership ID.
+- Only one active membership may exist for an organization/user pair.
+- A competing active membership ID is retryable; the losing transaction and inbox insertion roll back.
+
+## Authorization flow
+
+For authenticated current-organization requests:
+
+1. verify the Bearer token with the Clerk SDK;
+2. require the verified active organization claim;
+3. call Identity `/me` over the private Docker network;
+4. require an active local Identity account;
+5. resolve the local organization projection and lifecycle status;
+6. load the active membership by local organization ID and verified Clerk user ID;
+7. load local effective permissions;
+8. construct an immutable `ActorContext`;
+9. authorize the endpoint.
+
+The Identity call occurs outside Organization PostgreSQL transactions. Identity outage does not fail Organization readiness and does not stop webhook processing.
+
+Authenticated responses use:
 
 ```http
 Cache-Control: no-store
 Vary: Authorization
 ```
 
-401 responses also set:
+Unauthorized responses use:
 
 ```http
 WWW-Authenticate: Bearer realm="bridgeworks"
 ```
 
-APISIX handles browser CORS using the same `CLERK_AUTHORIZED_PARTIES` allowlist, never wildcard origins and never credentialed CORS.
+## Local commands
 
-## Health semantics
-
-Liveness is process-only. Readiness checks Organization PostgreSQL only and intentionally excludes Identity Service.
-
-When Identity Service is unavailable:
-
-- organization liveness remains `200`;
-- organization readiness remains `200` while Organization PostgreSQL is healthy;
-- organization webhooks remain processable;
-- authenticated organization APIs return sanitized `503`.
-
-When Organization PostgreSQL is unavailable:
-
-- liveness remains `200`;
-- readiness, webhooks and authenticated organization APIs return `503`;
-- Identity Service remains independent.
-
-## Clerk Dashboard setup
-
-1. Create a separate organization webhook endpoint.
-2. Set its public URL to `/api/v1/organizations/webhooks/clerk`.
-3. Subscribe to the six exact event names listed above.
-4. Copy the endpoint signing secret to `CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET`.
-5. Never commit the real secret.
-6. Configure Clerk organization/session tokens to include the active organization context required by the current official SDK setup.
-7. Do not place BridgeWorks application permissions exclusively in client-controlled or provider metadata.
-
-Dummy JWT keys and webhook secrets in `.env.example` are local/CI-only and are not production-safe.
-
-## Local workflow
+From the repository root:
 
 ```bash
-cp -n .env.example .env
+cp .env.example .env
 make organization-sqlc-check
-make organization-migrate-up
 make stack-up
-make gateway-smoke
 make organization-smoke
 ```
 
-Migration CLI supports only:
+Module validation:
 
 ```bash
-organization-migrate up
-organization-migrate status
-organization-migrate version
-```
-
-There is no down/reset/redo command exposed by the binary or Makefile.
-
-## Validation
-
-```bash
-make repo-check
-make identity-sqlc-check
-make organization-sqlc-check
-
 cd service/organization-service
 unformatted="$(find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
 test -z "${unformatted}"
@@ -212,11 +187,11 @@ go mod tidy -diff
 go vet ./...
 go test -race -coverprofile=coverage.out ./...
 golangci-lint run ./...
+go tool cover -func=coverage.out
 ```
 
-CI preserves all Identity integration scenarios and adds real PostgreSQL, signed organization webhook, tenant-isolation, Identity-dependency, CORS, cache-header and port-isolation scenarios.
+The CI integration suite runs signed Clerk webhook synchronization, transactional conflict/concurrency regressions, real PostgreSQL constraint behavior, current-organization authorization, CORS/cache/security contracts, dependency outage/recovery, migration idempotency, and private-port isolation.
 
 ## Production operations
 
 Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
-
