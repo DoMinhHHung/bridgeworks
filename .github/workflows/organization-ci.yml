@@ -71,6 +71,8 @@ jobs:
           grep --quiet "ROLLBACK TO SAVEPOINT membership_insert" service/organization-service/internal/store/repository.go
           grep --quiet "memberships_clerk_membership_id_uq" service/organization-service/internal/organizationsync/unit_of_work.go
           grep --quiet "memberships_active_organization_user_uq" service/organization-service/internal/organizationsync/unit_of_work.go
+          grep --quiet "validateMembershipOwnership" service/organization-service/internal/organizationsync/service.go
+          grep --quiet "inconsistent Clerk membership projection" service/organization-service/internal/organizationsync/service.go
 
       - name: Validate Organization Go module
         shell: bash
@@ -185,6 +187,10 @@ jobs:
       - name: Verify membership conflict and concurrency regressions
         shell: bash
         run: bash .github/scripts/verify-organization-conflicts.sh
+
+      - name: Verify membership projection ownership invariant
+        shell: bash
+        run: bash .github/scripts/verify-organization-membership-ownership.sh
 
       - name: Verify unrelated PostgreSQL unique violation
         shell: bash
