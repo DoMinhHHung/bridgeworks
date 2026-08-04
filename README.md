@@ -1251,7 +1251,7 @@ organization-service:9090/metrics
 
 The ports are available only inside the Docker `bridgeworks` network. APISIX does not route `/metrics`, and the metrics ports are not published to the host.
 
-Every completed application request emits a structured access record with `service`, `request_id`, `method`, bounded chi `route`, `status`, `duration_ms`, and `response_bytes`. Health completion records use debug level. Raw paths, query strings, request/response bodies, authorization material, webhook signatures, email addresses, provider identifiers, local UUIDs, database URLs, and raw dependency errors are excluded.
+Every completed application request emits a structured access record with `service`, `request_id`, `method`, bounded chi `route`, `status`, `duration_ms`, and `response_bytes`. Health completion records are written only at debug level; with the normal info threshold they are intentionally absent. Raw paths, query strings, request/response bodies, authorization material, webhook signatures, email addresses, provider identifiers, local UUIDs, database URLs, and raw dependency errors are excluded.
 
 Implemented metrics:
 
@@ -1273,3 +1273,11 @@ database_pool_canceled_acquire_count_total{service,pool}
 Route labels use matched chi templates or the bounded fallback `unknown`. Webhook aggregates and outcomes use explicit bounded enums. PostgreSQL pool metrics are collected from `pgxpool.Stat()` at scrape time without queries or ticker goroutines.
 
 Metrics and scraping do not participate in application readiness. PostgreSQL pool defaults remain unchanged until load tests provide evidence for a safe per-replica connection budget. Redis cache-aside, using Upstash when implemented, rate limiting, OpenTelemetry tracing, and inbox retention remain separate roadmap work.
+
+## Observability correction guarantees
+
+Production webhook metrics now require outcome-capable application processors at compile time. The instrumented routes call `ProcessWithResult` directly; they do not type-assert, fall back to `Process`, or default an event to `processed`.
+
+HTTP metric method labels are restricted to `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`. Access logs preserve the actual request method for diagnostics, while arbitrary methods collapse to `OTHER` in Prometheus. Identity accepts only the `user` webhook aggregate; Organization accepts only `organization` and `membership`.
+
+PostgreSQL pool collection remains scrape-time and nil-safe, but programming panics are not silently swallowed. Graceful shutdown stops the private metrics server before the application server and PostgreSQL pool. Health request completion records are logged only at debug level; with the normal info threshold they are intentionally absent.

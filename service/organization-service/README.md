@@ -224,8 +224,14 @@ database_pool_*{service,pool="runtime"}
 
 Webhook aggregate values are `organization` and `membership`. Outcomes are `processed`, `duplicate`, `stale`, `rejected`, and `retryable_failure`. Processed, duplicate, and stale outcomes come from the application-owned Unit of Work after its commit decision; the HTTP layer does not infer persistence semantics from status codes.
 
-Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records use debug level.
+Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records are written only at debug level; with the normal info threshold they are intentionally absent.
 
 Access logs and metrics exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk user, organization, or membership IDs, local UUIDs, database URLs, request or response bodies, request IDs as metric labels, and raw dependency errors.
 
 Pool defaults remain unchanged until measured load tests establish throughput, latency, replica count, connection wait, and the total Organization PostgreSQL connection budget. OpenTelemetry tracing, APISIX rate limiting, caching, and inbox retention remain separate work.
+
+### Correction-round telemetry guarantees
+
+The production Clerk webhook route depends on `ProcessWithResult(context.Context, organizationsync.Event) (organizationsync.Result, error)` at compile time. There is no runtime type assertion, fallback to `Process`, or default `processed` outcome. Organization webhook metrics accept only `aggregate=organization|membership`.
+
+HTTP metric method labels use the bounded values `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`; arbitrary methods map to `OTHER`. Access logs retain the actual request method. Pool metrics are collected from `pgxpool.Stat()` at scrape time without database queries or silent panic recovery. Shutdown stops metrics serving before closing PostgreSQL. Health completion records are debug-only and are absent at the normal info log threshold.

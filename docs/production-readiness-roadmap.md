@@ -163,3 +163,9 @@ Identity and Organization currently use static configured public verification ke
 - [`runbooks/clerk-jwt-key-rotation.md`](runbooks/clerk-jwt-key-rotation.md)
 
 The static-key design has limited overlap support. A future design should evaluate multi-key verification or Clerk JWKS retrieval with bounded caching, issuer validation, failure fallback, and rotation observability before implementation.
+
+### Observability correction status
+
+The completed observability foundation enforces webhook outcomes through compile-time application interfaces, bounds arbitrary HTTP methods to the Prometheus label `OTHER`, validates service-specific webhook aggregate allowlists, and does not silently recover pool-collector programming panics. Private-listener isolation and shutdown ordering are covered by regression tests. Health access records remain debug-only and are normally absent when services run at info level.
+
+This does not complete load testing, pool sizing, rate limiting, Upstash Redis cache-aside, OpenTelemetry, or inbox retention.

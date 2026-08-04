@@ -367,8 +367,14 @@ database_pool_*{service,pool="runtime"}
 
 Webhook outcomes are `processed`, `duplicate`, `stale`, `rejected`, and `retryable_failure`. Processed, duplicate, and stale outcomes are returned by the application transaction flow after the corresponding commit decision.
 
-Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records use debug level.
+Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records are written only at debug level; with the normal info threshold they are intentionally absent.
 
 Access logs and metrics exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk user IDs, local UUIDs, database URLs, request or response bodies, request IDs as metric labels, and raw dependency errors.
 
 Pool defaults remain unchanged until measured load tests establish throughput, latency, replica count, connection wait, and the total Supabase PostgreSQL connection budget. A later Identity cache-aside PR will use Upstash Redis with PostgreSQL fallback and Redis excluded from readiness; no Redis code exists in this observability PR.
+
+### Correction-round telemetry guarantees
+
+The production Clerk webhook route depends on `ProcessWithResult(context.Context, clerkwebhook.Event) (usersync.Result, error)` at compile time. There is no runtime type assertion, fallback to `Process`, or default `processed` outcome. Identity webhook metrics accept only `aggregate=user`.
+
+HTTP metric method labels use the bounded values `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`; arbitrary methods map to `OTHER`. Access logs retain the actual request method. Pool metrics are collected from `pgxpool.Stat()` at scrape time without database queries or silent panic recovery. Shutdown stops metrics serving before closing PostgreSQL. Health completion records are debug-only and are absent at the normal info log threshold.
