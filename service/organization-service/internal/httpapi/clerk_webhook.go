@@ -58,7 +58,9 @@ func ClerkWebhookWithMetrics(
 ) http.HandlerFunc {
 	return clerkWebhookCore(
 		verifier,
-		processor.ProcessWithResult,
+		func(ctx context.Context, event organizationsync.Event) (organizationsync.Result, error) {
+			return processor.ProcessWithResult(ctx, event)
+		},
 		metrics,
 		logger,
 		maxBodyBytes,
