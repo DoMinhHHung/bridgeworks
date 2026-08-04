@@ -94,14 +94,14 @@ for _ in $(seq 1 30); do
     --request PURGE -H 'X-Request-Id: obs-custom-method' \
     "${base_url}/__observability/custom-method")"
   if grep --ignore-case --quiet --extended-regexp \
-    '^X-Request-Id:[[:space:]]*obs-custom-method\r?$' "${custom_method_headers}"; then
+    '^X-Request-Id:[[:space:]]*obs-custom-method[[:space:]]*$' "${custom_method_headers}"; then
     route_selected=true
     break
   fi
   sleep 1
 done
 test "${route_selected}" = "true"
-test "${custom_method_status}" = "404"
+test "${custom_method_status}" = "405"
 
 cat > "${work}/identity.json" <<'JSON'
 {"type":"user.created","timestamp":1785826800000,"data":{"id":"user_obs_metrics","primary_email_address_id":"email_obs_metrics","email_addresses":[{"id":"email_obs_metrics","email_address":"observability@example.test","verification":{"status":"verified"}}]}}
