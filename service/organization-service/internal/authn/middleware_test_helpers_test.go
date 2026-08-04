@@ -2,7 +2,6 @@ package authn
 
 import (
 	"bytes"
-	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -28,10 +27,16 @@ const testRequestID = "request-test-123"
 func newTestMiddleware(t *testing.T, key *rsa.PrivateKey) (func(http.Handler) http.Handler, *bytes.Buffer) {
 	t.Helper()
 	logs := &bytes.Buffer{}
-	middleware, err := New(Config{JWTKey: publicKeyPEM(t, key), Issuer: testIssuer, AuthorizedParties: []string{testAuthorizedParty}, Leeway: 5 * time.Second}, slog.New(slog.NewTextHandler(logs, nil)), func(ctx context.Context) string {
-		value, _ := ctx.Value(requestIDContextKey{}).(string)
-		return value
-	})
+	middleware, err := New(
+		Config{
+			JWTKey:            publicKeyPEM(t, key),
+			Issuer:            testIssuer,
+			AuthorizedParties: []string{testAuthorizedParty},
+			Leeway:            5 * time.Second,
+		},
+		slog.New(slog.NewTextHandler(logs, nil)),
+		func(_ context.Context) string { return testRequestID },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +45,6 @@ func newTestMiddleware(t *testing.T, key *rsa.PrivateKey) (func(http.Handler) ht
 
 func serveRequest(middleware func(http.Handler) http.Handler, authorizationHeader string, next http.Handler) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodGet, "/organizations/current", nil)
-	request = request.WithContext(context.WithValue(request.Context(), requestIDContextKey{}, testRequestID))
 	if authorizationHeader != "" {
 		request.Header.Set("Authorization", authorizationHeader)
 	}
