@@ -22,7 +22,7 @@ func TestLoadMetricsAddr(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := loadMetricsAddr(mapLookup(tt.env), tt.httpAddr)
+			got, err := loadMetricsAddr(metricsMapLookup(tt.env), tt.httpAddr)
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 					t.Fatalf("error = %v", err)
@@ -33,5 +33,12 @@ func TestLoadMetricsAddr(t *testing.T) {
 				t.Fatalf("got %q, err %v", got, err)
 			}
 		})
+	}
+}
+
+func metricsMapLookup(values map[string]string) lookupEnvFunc {
+	return func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
 	}
 }
