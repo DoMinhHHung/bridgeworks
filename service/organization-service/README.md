@@ -71,18 +71,16 @@ Public endpoint:
 POST /api/v1/organizations/webhooks/clerk
 ```
 
-Exact supported current Clerk event names:
+Exact supported current Clerk webhook event names:
 
 ```text
 organization.created
 organization.updated
 organization.deleted
-organization_membership.created
-organization_membership.updated
-organization_membership.deleted
+organizationMembership.created
+organizationMembership.updated
+organizationMembership.deleted
 ```
-
-The membership names use `organization_membership.*`; the earlier camelCase expectation is not the current official event name.
 
 Raw request bytes are read once, bounded, verified by the official Svix library, and only then decoded into a narrow DTO. The service never persists raw payloads, webhook headers, signatures, email, names of users, images or full public-user data.
 
@@ -111,7 +109,7 @@ Authenticated browser flow:
 ```text
 Clerk Bearer token
 → official Clerk Go SDK verification
-→ active `org_id` claim selects the tenant projection
+→ active organization claim selects the tenant projection
 → private Identity Service GET /me using the same Bearer token
 → active local organization
 → active membership scoped by organization ID + verified Clerk user ID
@@ -174,7 +172,7 @@ When Organization PostgreSQL is unavailable:
 3. Subscribe to the six exact event names listed above.
 4. Copy the endpoint signing secret to `CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET`.
 5. Never commit the real secret.
-6. Ensure Clerk session tokens expose the official active organization context used by the SDK (`org_id`).
+6. Configure Clerk organization/session tokens to include the active organization context required by the current official SDK setup.
 7. Do not place BridgeWorks application permissions exclusively in client-controlled or provider metadata.
 
 Dummy JWT keys and webhook secrets in `.env.example` are local/CI-only and are not production-safe.
