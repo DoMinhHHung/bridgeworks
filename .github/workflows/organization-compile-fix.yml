@@ -1,0 +1,36 @@
+name: Apply Organization Compile Fixes
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-organization-compile-fixes
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: feat/organization-sync-authorization
+          fetch-depth: 0
+      - name: Apply focused fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i '/^[[:space:]]*"strings"$/d' service/organization-service/internal/config/config.go
+          sed -i '/^import (/a\	"crypto/rsa"' service/organization-service/internal/authn/middleware_test.go
+          find service/organization-service -name '*.go' -type f -print0 | xargs -0 -r gofmt -w
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add service/organization-service
+          git diff --cached --check
+          git commit -m "fix(organization): repair compile imports"
+          git push origin HEAD:feat/organization-sync-authorization
