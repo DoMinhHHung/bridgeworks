@@ -1,0 +1,212 @@
+openapi: 3.1.0
+info:
+  title: BridgeWorks Organization Service API
+  version: 0.1.0
+  description: Organization synchronization, local membership authorization, and current-organization projections exposed through APISIX.
+paths:
+  /api/v1/organizations/health/live:
+    get:
+      summary: Check Organization Service process liveness
+      operationId: getOrganizationLiveness
+      responses:
+        "200":
+          description: Process is alive
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /api/v1/organizations/health/ready:
+    get:
+      summary: Check Organization PostgreSQL readiness
+      operationId: getOrganizationReadiness
+      description: Identity Service is intentionally excluded because it is a request-time dependency only.
+      responses:
+        "200":
+          description: Organization PostgreSQL is reachable
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /api/v1/organizations/webhooks/clerk:
+    post:
+      summary: Synchronize verified Clerk organization events
+      operationId: synchronizeClerkOrganizationWebhook
+      description: Public Svix-signed endpoint. Signature verification occurs on the raw body before narrow decoding.
+      responses:
+        "204":
+          description: Supported event processed, duplicate or stale event retained, or verified unsupported event ignored
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        "400": { $ref: "#/components/responses/InvalidWebhook" }
+        "413": { $ref: "#/components/responses/RequestTooLarge" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /api/v1/organizations/current:
+    options:
+      summary: Browser CORS preflight
+      responses:
+        "204": { description: Preflight accepted for a configured origin }
+    get:
+      summary: Return the active local organization projection
+      operationId: getCurrentOrganization
+      security: [{ ClerkSessionToken: [] }]
+      responses:
+        "200":
+          description: Current active organization
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentOrganization" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+  /api/v1/organizations/current/membership:
+    options:
+      summary: Browser CORS preflight
+      responses:
+        "204": { description: Preflight accepted for a configured origin }
+    get:
+      summary: Return the actor's local membership authorization projection
+      operationId: getCurrentOrganizationMembership
+      security: [{ ClerkSessionToken: [] }]
+      responses:
+        "200":
+          description: Current active membership and local effective permissions
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentMembership" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+components:
+  securitySchemes:
+    ClerkSessionToken:
+      type: http
+      scheme: bearer
+      bearerFormat: Clerk session token
+      description: Verified Clerk session JWT with an active organization context. JWT organization role and permissions are not authorization authority.
+  headers:
+    RequestID:
+      description: Request correlation identifier generated or forwarded by APISIX.
+      schema: { type: string }
+    NoStore:
+      description: Authenticated projections must not be cached.
+      schema: { type: string, const: no-store }
+    VaryAuthorization:
+      description: Contains Authorization and may also contain Origin.
+      schema: { type: string }
+    BearerChallenge:
+      description: Stable Bearer authentication challenge without token-validation details.
+      schema: { type: string, const: 'Bearer realm="bridgeworks"' }
+    RetryAfter:
+      description: Suggested retry delay in seconds for eventual-consistency lag.
+      schema: { type: integer, const: 2 }
+  responses:
+    Unauthorized:
+      description: Clerk session token is missing or invalid
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        WWW-Authenticate: { $ref: "#/components/headers/BearerChallenge" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Account, organization, membership, or local permission denies access
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: Active organization context or an eventually consistent local projection is not ready
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    InvalidWebhook:
+      description: Signature, required Svix header, or verified payload is invalid
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RequestTooLarge:
+      description: Webhook body exceeds the configured maximum
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    ServiceUnavailable:
+      description: Organization PostgreSQL or webhook processing is temporarily unavailable
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    ServiceUnavailableAuthenticated:
+      description: Organization PostgreSQL or Identity Service is temporarily unavailable
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, service]
+      properties:
+        status: { type: string, const: ok }
+        service: { type: string, const: organization-service }
+    CurrentOrganization:
+      type: object
+      additionalProperties: false
+      required: [id, name, slug, status]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: [string, "null"] }
+        slug: { type: [string, "null"] }
+        status: { type: string, const: active }
+    CurrentMembership:
+      type: object
+      additionalProperties: false
+      required: [id, organization_id, role, permissions]
+      properties:
+        id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid }
+        role: { type: string, enum: [admin, viewer] }
+        permissions:
+          type: array
+          items: { type: string }
+          description: Lexicographically sorted local effective permissions.
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [code, message, request_id, details]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        request_id: { type: string }
+        details: {}

@@ -1221,3 +1221,19 @@ Mục tiêu là tạo một mạng lưới nhỏ nhưng có thanh khoản, trust
 ## 24. One-Sentence Strategy
 
 > Bán bench utilization trước, tích lũy trust data sau, rồi mới mở rộng sang verified recruitment và final-round candidate exchange.
+
+
+---
+
+## Runtime services
+
+BridgeWorks runs Identity Service and Organization Service as independent Go modules. Both upstream ports remain private on the Docker network; APISIX on `http://127.0.0.1:9080` is the only host-published HTTP entry point.
+
+Start the stack with `cp .env.example .env` and `make stack-up`. Organization public paths are `/api/v1/organizations/health/live`, `/api/v1/organizations/health/ready`, `/api/v1/organizations/webhooks/clerk`, `/api/v1/organizations/current`, and `/api/v1/organizations/current/membership`. Run `make organization-smoke` for the APISIX health smoke test. Service ownership, migration, Clerk setup, ordering, and authorization semantics are documented in `service/organization-service/README.md`.
+
+---
+
+## Production operations
+
+Operational follow-up design is tracked in [Production Readiness Roadmap](docs/production-readiness-roadmap.md). Clerk verification-key rotations must follow the [Clerk JWT Key Rotation Runbook](docs/runbooks/clerk-jwt-key-rotation.md).
+
