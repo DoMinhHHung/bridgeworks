@@ -56,7 +56,7 @@ jobs:
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
           test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
 
-      - name: Verify private observability topology
+      - name: Verify private observability topology and bounded contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -65,8 +65,20 @@ jobs:
           grep --quiet 'ORGANIZATION_METRICS_ADDR' compose.yaml
           grep --quiet 'expose: \["8080", "9090"\]' compose.yaml
           ! grep -R --line-number --fixed-strings ':9090' gateway/apisix
+          ! grep -R --line-number --fixed-strings '/__observability/custom-method' gateway/apisix
           ! grep -R --line-number 'prometheus.Default' service/identity-service service/organization-service
           ! grep -R --line-number 'promauto' service/identity-service service/organization-service
+          grep --quiet 'type ClerkWebhookOutcomeProcessor interface' service/identity-service/internal/httpapi/clerk_webhook.go
+          grep --quiet 'type EventOutcomeProcessor interface' service/organization-service/internal/httpapi/clerk_webhook.go
+          ! grep --quiet --fixed-strings 'processor.(clerkWebhookOutcomeProcessor)' service/identity-service/internal/httpapi/clerk_webhook.go
+          ! grep --quiet --fixed-strings 'processor.(eventOutcomeProcessor)' service/organization-service/internal/httpapi/clerk_webhook.go
+          grep --quiet 'normalizeHTTPMethod' service/identity-service/internal/observability/metrics.go
+          grep --quiet 'normalizeHTTPMethod' service/organization-service/internal/observability/metrics.go
+          ! grep --quiet 'AggregateOrganization' service/identity-service/internal/observability/metrics.go
+          ! grep --quiet 'AggregateUser' service/organization-service/internal/observability/metrics.go
+          ! grep -R --line-number --fixed-strings 'defer func() { _ = recover() }()' \
+            service/identity-service/internal/observability \
+            service/organization-service/internal/observability
 
       - name: Validate Identity Go module
         shell: bash
