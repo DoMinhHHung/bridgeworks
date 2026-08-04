@@ -1,12 +1,10 @@
 # Production Readiness Roadmap
 
-This document records operational work identified during the Organization Service production-readiness review. These items are intentionally not implemented in PR #7 because they require focused design, capacity measurements, rollout plans, and independent failure-mode validation.
-
-The roadmap applies to the Identity and Organization services unless a section says otherwise.
+This document records focused operational work for Identity Service and Organization Service. PR #8 implements the bounded metrics and access-log foundation only; capacity, traffic protection, tracing, caching, and retention remain separate work that requires measured rollout criteria.
 
 ## Group A — Traffic protection and capacity
 
-### Load testing before pool changes
+### Load testing before pool changes — pending
 
 Do not raise PostgreSQL pool defaults from intuition or copy values from another deployment. Establish a repeatable load-test target first:
 
@@ -27,7 +25,9 @@ per-replica max connections
 
 Identity and Organization need separate budgets. Migration jobs must use separately budgeted credentials and connections. Any pool increase requires evidence that connection wait, query latency, and database CPU support the change.
 
-### APISIX rate limiting
+PR #8 exposes the pool telemetry required for this decision but deliberately leaves all pool defaults unchanged.
+
+### APISIX rate limiting — pending
 
 Rate limiting requires an endpoint-specific policy rather than one broad global quota. A focused gateway PR must define:
 
@@ -45,42 +45,68 @@ Webhook quotas must account for legitimate Clerk retry bursts and should not sha
 
 ## Group B — Observability
 
-### Structured success access logs
+### Structured HTTP access logs — completed in PR #8
 
-Add bounded structured logs for successful requests, not only errors. Required fields should include:
+Every completed application request emits one structured `slog` record with:
 
-- service name;
-- request ID;
-- method;
-- route template, never an unbounded raw path when avoidable;
-- status code;
-- duration;
-- response size where practical.
+- `service`;
+- `request_id`;
+- `method`;
+- bounded chi `route` pattern;
+- `status`;
+- `duration_ms`;
+- `response_bytes`.
 
-Do not log Authorization headers, JWTs, webhook bodies, signing headers, email addresses, Clerk IDs, database URLs, or raw dependency errors.
+Unmatched requests use `route=unknown`; raw paths and query strings are never used as fallback values. Middleware ordering ensures the request ID exists first and recovered panics produce a final `500` completion record. Health request completion logs use debug level to avoid routine probe noise.
 
-### Metrics
+Access logs do not include Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk identifiers, membership identifiers, local UUIDs, database URLs, request/response bodies, or raw dependency errors.
 
-Add low-cardinality HTTP metrics:
+### Low-cardinality HTTP and webhook metrics — completed in PR #8
 
-- request count by service, route template, method, and status class;
-- request duration histogram by route template and method;
-- in-flight request gauge;
-- webhook outcome counters for accepted, duplicate, stale, rejected, and retryable failure classes.
+Each service owns an independent Prometheus registry. Implemented HTTP metrics are:
 
-Add PostgreSQL pool metrics:
+```text
+http_requests_total{service,route,method,status_class}
+http_request_duration_seconds{service,route,method}
+http_requests_in_flight{service}
+```
 
-- acquired and idle connections;
-- maximum configured connections;
-- acquisition count and wait duration;
-- canceled acquisitions;
-- query or transaction timeout counts where available.
+`route` is the matched chi route pattern or the bounded value `unknown`. `status_class` is restricted to `1xx|2xx|3xx|4xx|5xx`. No provider/user identifier, request ID, raw path, error string, host, database value, or authorization party is a label.
 
-Do not put provider IDs, user IDs, organization IDs, request IDs, raw paths, or error strings into metric labels.
+Implemented Clerk webhook metric:
 
-### Tracing
+```text
+clerk_webhook_events_total{service,aggregate,outcome}
+```
 
-Adopt W3C Trace Context propagation across APISIX, Identity, and Organization. A focused OpenTelemetry PR must define:
+Bounded aggregates are `user`, `organization`, and `membership`. Bounded outcomes are `processed`, `duplicate`, `stale`, `rejected`, and `retryable_failure`. Processed/duplicate/stale values come from application-layer transaction results rather than inference from HTTP status.
+
+### PostgreSQL pool metrics — completed in PR #8
+
+A scrape-time collector reads `pgxpool.Stat()` without running a database query or ticker goroutine. It exposes:
+
+```text
+database_pool_acquired_connections
+database_pool_idle_connections
+database_pool_total_connections
+database_pool_max_connections
+database_pool_acquire_count_total
+database_pool_acquire_duration_seconds_total
+database_pool_empty_acquire_count_total
+database_pool_canceled_acquire_count_total
+```
+
+Labels are restricted to `service` and `pool=runtime`. Nil or closed pool handling is defensive and cannot panic the request path. Collector execution does not participate in readiness.
+
+### Private metrics listeners — completed in PR #8
+
+Identity uses `METRICS_ADDR` and Organization uses `ORGANIZATION_METRICS_ADDR`, both defaulting to `:9090` inside their own containers. Each listener exposes only `GET /metrics`, has HTTP timeouts and graceful shutdown, and fails startup if it cannot bind.
+
+Metrics ports are exposed only on the private Docker network. They are not host-published and no APISIX route points to them. Prometheus absence or scrape failure does not affect application requests or `/health/ready`.
+
+### OpenTelemetry tracing — pending
+
+Adopt W3C Trace Context propagation across APISIX, Identity, and Organization in a focused later PR. That work must define:
 
 - inbound `traceparent` and `tracestate` handling;
 - propagation on the private Organization-to-Identity call;
@@ -90,31 +116,30 @@ Adopt W3C Trace Context propagation across APISIX, Identity, and Organization. A
 - exporter timeout and backpressure behavior;
 - behavior when the collector is unavailable.
 
-Metrics and tracing exporters are operational dependencies only. They must not make service readiness fail.
-
-No unauthenticated public metrics endpoint may be exposed through APISIX. Metrics should be scraped or exported only through a private operational network or collector path.
+Tracing exporters are operational dependencies only. They must not make service readiness fail. PR #8 intentionally adds no OpenTelemetry SDK, exporter, or collector.
 
 ## Group C — Lifecycle operations
 
-### Identity `/me` Redis cache-aside
+### Identity `/me` Upstash Redis cache-aside — pending
 
-A future Identity PR may introduce Redis cache-aside for the local account projection returned by `/me`.
+A future Identity PR may introduce Upstash Redis cache-aside for the local account projection returned by `/me`.
 
 Required properties:
 
 - PostgreSQL remains the source of truth;
-- a cache miss or Redis outage falls back to PostgreSQL;
+- a cache miss or Upstash outage falls back to PostgreSQL;
 - Redis is excluded from readiness;
 - cache entries are bounded by TTL and schema version;
 - cache invalidation occurs only after a successful user-sync transaction commits;
 - disabled and deleted status changes must invalidate or replace cached active projections;
 - cache keys and values must not expose secrets;
 - stampede behavior and negative caching require explicit design;
+- network/TLS timeout to Upstash must be short and bounded;
 - the Organization-to-Identity request timeout must still bound cache and database fallback work.
 
-Do not copy a generic Redis snippet into Identity. The cache contract must be tested against webhook commit, rollback, outage, and stale-entry scenarios.
+Do not copy a generic Redis snippet into Identity. The cache contract must be tested against webhook commit, rollback, outage, stale-entry, and multi-instance invalidation scenarios. PR #8 adds telemetry needed to measure cache impact but contains no Redis code.
 
-### Webhook inbox retention
+### Webhook inbox retention — pending
 
 Both Identity and Organization webhook inbox tables need bounded retention. The retention duration must be selected from actual replay, incident investigation, compliance, and audit requirements.
 
@@ -131,7 +156,7 @@ A focused retention design must define:
 
 Do not add `pg_cron`, an application goroutine, or a scheduler implicitly. Choose the operational owner and execution mechanism explicitly.
 
-### Clerk JWT verification-key rotation
+### Clerk JWT verification-key rotation — runbook exists; design follow-up pending
 
 Identity and Organization currently use static configured public verification key material. Operators must follow the checked-in rotation runbook:
 
