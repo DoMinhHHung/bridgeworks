@@ -25,10 +25,20 @@ type GetActiveMembershipByOrganizationUserParams struct {
 	ClerkUserID    string
 }
 
-func (q *Queries) GetActiveMembershipByOrganizationUser(ctx context.Context, arg GetActiveMembershipByOrganizationUserParams) (Membership, error) {
+func (q *Queries) GetActiveMembershipByOrganizationUser(ctx context.Context, arg GetActiveMembershipByOrganizationUserParams) (OrganizationMembership, error) {
 	row := q.db.QueryRow(ctx, getActiveMembershipByOrganizationUser, arg.OrganizationID, arg.ClerkUserID)
-	var i Membership
-	err := row.Scan(&i.ID, &i.ClerkMembershipID, &i.OrganizationID, &i.ClerkUserID, &i.ClerkRole, &i.ApplicationRole, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkMembershipID,
+		&i.OrganizationID,
+		&i.ClerkUserID,
+		&i.ClerkRole,
+		&i.ApplicationRole,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -39,10 +49,20 @@ FROM organization.memberships
 WHERE clerk_membership_id = $1
 `
 
-func (q *Queries) GetMembershipByClerkID(ctx context.Context, clerkMembershipID string) (Membership, error) {
+func (q *Queries) GetMembershipByClerkID(ctx context.Context, clerkMembershipID string) (OrganizationMembership, error) {
 	row := q.db.QueryRow(ctx, getMembershipByClerkID, clerkMembershipID)
-	var i Membership
-	err := row.Scan(&i.ID, &i.ClerkMembershipID, &i.OrganizationID, &i.ClerkUserID, &i.ClerkRole, &i.ApplicationRole, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkMembershipID,
+		&i.OrganizationID,
+		&i.ClerkUserID,
+		&i.ClerkRole,
+		&i.ApplicationRole,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -65,10 +85,28 @@ type InsertMembershipParams struct {
 	Status            string
 }
 
-func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipParams) (Membership, error) {
-	row := q.db.QueryRow(ctx, insertMembership, arg.ID, arg.ClerkMembershipID, arg.OrganizationID, arg.ClerkUserID, arg.ClerkRole, arg.ApplicationRole, arg.Status)
-	var i Membership
-	err := row.Scan(&i.ID, &i.ClerkMembershipID, &i.OrganizationID, &i.ClerkUserID, &i.ClerkRole, &i.ApplicationRole, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+func (q *Queries) InsertMembership(ctx context.Context, arg InsertMembershipParams) (OrganizationMembership, error) {
+	row := q.db.QueryRow(ctx, insertMembership,
+		arg.ID,
+		arg.ClerkMembershipID,
+		arg.OrganizationID,
+		arg.ClerkUserID,
+		arg.ClerkRole,
+		arg.ApplicationRole,
+		arg.Status,
+	)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkMembershipID,
+		&i.OrganizationID,
+		&i.ClerkUserID,
+		&i.ClerkRole,
+		&i.ApplicationRole,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -87,11 +125,11 @@ func (q *Queries) ListPermissionsForRole(ctx context.Context, roleKey string) ([
 	defer rows.Close()
 	var items []string
 	for rows.Next() {
-		var permissionKey string
-		if err := rows.Scan(&permissionKey); err != nil {
+		var permission_key string
+		if err := rows.Scan(&permission_key); err != nil {
 			return nil, err
 		}
-		items = append(items, permissionKey)
+		items = append(items, permission_key)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -107,10 +145,20 @@ RETURNING id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
           application_role, status, created_at, updated_at
 `
 
-func (q *Queries) MarkMembershipDeleted(ctx context.Context, clerkMembershipID string) (Membership, error) {
+func (q *Queries) MarkMembershipDeleted(ctx context.Context, clerkMembershipID string) (OrganizationMembership, error) {
 	row := q.db.QueryRow(ctx, markMembershipDeleted, clerkMembershipID)
-	var i Membership
-	err := row.Scan(&i.ID, &i.ClerkMembershipID, &i.OrganizationID, &i.ClerkUserID, &i.ClerkRole, &i.ApplicationRole, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkMembershipID,
+		&i.OrganizationID,
+		&i.ClerkUserID,
+		&i.ClerkRole,
+		&i.ApplicationRole,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -128,9 +176,19 @@ type UpdateMembershipClerkRoleParams struct {
 	ClerkRole         *string
 }
 
-func (q *Queries) UpdateMembershipClerkRole(ctx context.Context, arg UpdateMembershipClerkRoleParams) (Membership, error) {
+func (q *Queries) UpdateMembershipClerkRole(ctx context.Context, arg UpdateMembershipClerkRoleParams) (OrganizationMembership, error) {
 	row := q.db.QueryRow(ctx, updateMembershipClerkRole, arg.ClerkMembershipID, arg.ClerkRole)
-	var i Membership
-	err := row.Scan(&i.ID, &i.ClerkMembershipID, &i.OrganizationID, &i.ClerkUserID, &i.ClerkRole, &i.ApplicationRole, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkMembershipID,
+		&i.OrganizationID,
+		&i.ClerkUserID,
+		&i.ClerkRole,
+		&i.ApplicationRole,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }

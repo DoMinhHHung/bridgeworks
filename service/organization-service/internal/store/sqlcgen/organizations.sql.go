@@ -17,10 +17,18 @@ FROM organization.organizations
 WHERE clerk_organization_id = $1
 `
 
-func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizationID string) (Organization, error) {
+func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
 	row := q.db.QueryRow(ctx, getOrganizationByClerkID, clerkOrganizationID)
-	var i Organization
-	err := row.Scan(&i.ID, &i.ClerkOrganizationID, &i.Name, &i.Slug, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -39,10 +47,24 @@ type InsertOrganizationParams struct {
 	Status              string
 }
 
-func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganizationParams) (Organization, error) {
-	row := q.db.QueryRow(ctx, insertOrganization, arg.ID, arg.ClerkOrganizationID, arg.Name, arg.Slug, arg.Status)
-	var i Organization
-	err := row.Scan(&i.ID, &i.ClerkOrganizationID, &i.Name, &i.Slug, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganizationParams) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, insertOrganization,
+		arg.ID,
+		arg.ClerkOrganizationID,
+		arg.Name,
+		arg.Slug,
+		arg.Status,
+	)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -55,10 +77,18 @@ WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at
 `
 
-func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (Organization, error) {
+func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
 	row := q.db.QueryRow(ctx, markOrganizationDeleted, clerkOrganizationID)
-	var i Organization
-	err := row.Scan(&i.ID, &i.ClerkOrganizationID, &i.Name, &i.Slug, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -81,9 +111,17 @@ type UpdateOrganizationProjectionParams struct {
 	Slug                *string
 }
 
-func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (Organization, error) {
+func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (OrganizationOrganization, error) {
 	row := q.db.QueryRow(ctx, updateOrganizationProjection, arg.ClerkOrganizationID, arg.Name, arg.Slug)
-	var i Organization
-	err := row.Scan(&i.ID, &i.ClerkOrganizationID, &i.Name, &i.Slug, &i.Status, &i.CreatedAt, &i.UpdatedAt)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }

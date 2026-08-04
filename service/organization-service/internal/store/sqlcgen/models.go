@@ -5,22 +5,21 @@
 package sqlcgen
 
 import (
-	"time"
-
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type ClerkWebhookEvent struct {
+type OrganizationClerkWebhookEvent struct {
 	EventID             string
 	EventType           string
 	AggregateType       string
 	AggregateID         string
 	ClerkOrganizationID string
-	OccurredAt          time.Time
-	ProcessedAt         time.Time
+	OccurredAt          pgtype.Timestamptz
+	ProcessedAt         pgtype.Timestamptz
 }
 
-type Membership struct {
+type OrganizationMembership struct {
 	ID                uuid.UUID
 	ClerkMembershipID string
 	OrganizationID    uuid.UUID
@@ -28,16 +27,16 @@ type Membership struct {
 	ClerkRole         *string
 	ApplicationRole   string
 	Status            string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
 }
 
-type Organization struct {
+type OrganizationOrganization struct {
 	ID                  uuid.UUID
 	ClerkOrganizationID string
 	Name                *string
 	Slug                *string
 	Status              string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
 }

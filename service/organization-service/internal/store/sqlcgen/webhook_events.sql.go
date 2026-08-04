@@ -7,15 +7,16 @@ package sqlcgen
 
 import (
 	"context"
-	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const acquireOrganizationAdvisoryLock = `-- name: AcquireOrganizationAdvisoryLock :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
 `
 
-func (q *Queries) AcquireOrganizationAdvisoryLock(ctx context.Context, clerkOrganizationID string) error {
-	_, err := q.db.Exec(ctx, acquireOrganizationAdvisoryLock, clerkOrganizationID)
+func (q *Queries) AcquireOrganizationAdvisoryLock(ctx context.Context, hashtextextended string) error {
+	_, err := q.db.Exec(ctx, acquireOrganizationAdvisoryLock, hashtextextended)
 	return err
 }
 
@@ -43,10 +44,18 @@ type GetLatestAggregateEventParams struct {
 	EventID       string
 }
 
-func (q *Queries) GetLatestAggregateEvent(ctx context.Context, arg GetLatestAggregateEventParams) (ClerkWebhookEvent, error) {
+func (q *Queries) GetLatestAggregateEvent(ctx context.Context, arg GetLatestAggregateEventParams) (OrganizationClerkWebhookEvent, error) {
 	row := q.db.QueryRow(ctx, getLatestAggregateEvent, arg.AggregateType, arg.AggregateID, arg.EventID)
-	var i ClerkWebhookEvent
-	err := row.Scan(&i.EventID, &i.EventType, &i.AggregateType, &i.AggregateID, &i.ClerkOrganizationID, &i.OccurredAt, &i.ProcessedAt)
+	var i OrganizationClerkWebhookEvent
+	err := row.Scan(
+		&i.EventID,
+		&i.EventType,
+		&i.AggregateType,
+		&i.AggregateID,
+		&i.ClerkOrganizationID,
+		&i.OccurredAt,
+		&i.ProcessedAt,
+	)
 	return i, err
 }
 
@@ -65,12 +74,19 @@ type InsertWebhookEventParams struct {
 	AggregateType       string
 	AggregateID         string
 	ClerkOrganizationID string
-	OccurredAt          time.Time
+	OccurredAt          pgtype.Timestamptz
 }
 
 func (q *Queries) InsertWebhookEvent(ctx context.Context, arg InsertWebhookEventParams) (string, error) {
-	row := q.db.QueryRow(ctx, insertWebhookEvent, arg.EventID, arg.EventType, arg.AggregateType, arg.AggregateID, arg.ClerkOrganizationID, arg.OccurredAt)
-	var eventID string
-	err := row.Scan(&eventID)
-	return eventID, err
+	row := q.db.QueryRow(ctx, insertWebhookEvent,
+		arg.EventID,
+		arg.EventType,
+		arg.AggregateType,
+		arg.AggregateID,
+		arg.ClerkOrganizationID,
+		arg.OccurredAt,
+	)
+	var event_id string
+	err := row.Scan(&event_id)
+	return event_id, err
 }
