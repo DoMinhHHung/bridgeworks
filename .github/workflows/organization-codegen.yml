@@ -1,0 +1,45 @@
+name: Organization Codegen Capture
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: organization-codegen-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Normalize module and generate sqlc
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd service/organization-service
+          go mod tidy
+          go mod download
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/src" \
+            --workdir /src/service/organization-service \
+            sqlc/sqlc:1.31.1 generate
+      - name: Upload generated source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: organization-codegen-${{ github.sha }}
+          path: |
+            service/organization-service/go.mod
+            service/organization-service/go.sum
+            service/organization-service/internal/store/sqlcgen
+          if-no-files-found: error
+          retention-days: 1
