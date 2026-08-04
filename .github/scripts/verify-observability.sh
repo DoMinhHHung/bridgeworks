@@ -71,7 +71,6 @@ marker = "#END"
 route = """  - id: bridgeworks-observability-custom-method-probe
     name: bridgeworks-observability-custom-method-probe
     uri: /__observability/custom-method
-    methods: [PURGE]
     plugins:
       request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
       proxy-rewrite: { uri: /__observability/custom-method }
