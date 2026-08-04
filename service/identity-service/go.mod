@@ -4,10 +4,12 @@ go 1.26.5
 
 require (
 	github.com/clerk/clerk-sdk-go/v2 v2.7.0
+	github.com/felixge/httpsnoop v1.0.4
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pressly/goose/v3 v3.27.3
+	github.com/prometheus/client_golang v1.23.2
 	github.com/svix/svix-webhooks v1.99.1
 )
 
