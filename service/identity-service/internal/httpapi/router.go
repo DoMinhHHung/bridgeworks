@@ -21,7 +21,7 @@ func NewRouter(
 	logger *slog.Logger,
 	readinessChecker ReadinessChecker,
 	clerkVerifier ClerkWebhookVerifier,
-	clerkProcessor ClerkWebhookProcessor,
+	clerkProcessor ClerkWebhookOutcomeProcessor,
 	authenticate func(http.Handler) http.Handler,
 	currentUserGetter CurrentUserGetter,
 ) http.Handler {
