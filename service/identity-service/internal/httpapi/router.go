@@ -38,7 +38,7 @@ func NewRouter(
 	router.Get("/health/ready", readinessHandler(config.ServiceName, readinessChecker, config.ReadinessTimeout))
 	router.Post(
 		"/webhooks/clerk",
-		clerkWebhookHandler(
+		clerkWebhookHandlerWithMetrics(
 			logger,
 			clerkVerifier,
 			clerkProcessor,
