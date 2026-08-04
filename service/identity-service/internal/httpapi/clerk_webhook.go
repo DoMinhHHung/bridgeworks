@@ -29,6 +29,16 @@ func clerkWebhookHandler(
 	logger *slog.Logger,
 	verifier ClerkWebhookVerifier,
 	processor ClerkWebhookProcessor,
+	maxBodyBytes int64,
+	processTimeout time.Duration,
+) http.HandlerFunc {
+	return clerkWebhookHandlerWithMetrics(logger, verifier, processor, nil, maxBodyBytes, processTimeout)
+}
+
+func clerkWebhookHandlerWithMetrics(
+	logger *slog.Logger,
+	verifier ClerkWebhookVerifier,
+	processor ClerkWebhookProcessor,
 	metrics Metrics,
 	maxBodyBytes int64,
 	processTimeout time.Duration,
@@ -40,22 +50,13 @@ func clerkWebhookHandler(
 			metricsObserveWebhook(metrics, observability.AggregateUser, observability.OutcomeRejected)
 			var maxBytesError *http.MaxBytesError
 			if errors.As(err, &maxBytesError) {
-				logger.WarnContext(
-					r.Context(),
-					"Clerk webhook body rejected",
-					"request_id", RequestIDFromContext(r.Context()),
-					"reason", "request_too_large",
-				)
+				logger.WarnContext(r.Context(), "Clerk webhook body rejected",
+					"request_id", RequestIDFromContext(r.Context()), "reason", "request_too_large")
 				writeError(w, r, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large", nil)
 				return
 			}
-
-			logger.WarnContext(
-				r.Context(),
-				"Clerk webhook body rejected",
-				"request_id", RequestIDFromContext(r.Context()),
-				"reason", "invalid_body",
-			)
+			logger.WarnContext(r.Context(), "Clerk webhook body rejected",
+				"request_id", RequestIDFromContext(r.Context()), "reason", "invalid_body")
 			writeError(w, r, http.StatusBadRequest, "invalid_webhook", "invalid webhook request", nil)
 			return
 		}
@@ -63,12 +64,8 @@ func clerkWebhookHandler(
 		event, err := verifier.VerifyAndParse(payload, r.Header)
 		if err != nil {
 			metricsObserveWebhook(metrics, observability.AggregateUser, observability.OutcomeRejected)
-			logger.WarnContext(
-				r.Context(),
-				"Clerk webhook rejected",
-				"request_id", RequestIDFromContext(r.Context()),
-				"reason", "verification_or_payload_invalid",
-			)
+			logger.WarnContext(r.Context(), "Clerk webhook rejected",
+				"request_id", RequestIDFromContext(r.Context()), "reason", "verification_or_payload_invalid")
 			writeError(w, r, http.StatusBadRequest, "invalid_webhook", "invalid webhook request", nil)
 			return
 		}
@@ -79,7 +76,6 @@ func clerkWebhookHandler(
 
 		processContext, cancel := context.WithTimeout(r.Context(), processTimeout)
 		defer cancel()
-
 		result := usersync.ResultProcessed
 		if outcomeProcessor, ok := processor.(clerkWebhookOutcomeProcessor); ok {
 			result, err = outcomeProcessor.ProcessWithResult(processContext, event)
@@ -88,12 +84,8 @@ func clerkWebhookHandler(
 		}
 		if err != nil {
 			metricsObserveWebhook(metrics, observability.AggregateUser, observability.OutcomeRetryableFailure)
-			logger.ErrorContext(
-				r.Context(),
-				"Clerk webhook processing failed",
-				"request_id", RequestIDFromContext(r.Context()),
-				"event_type", event.Type,
-			)
+			logger.ErrorContext(r.Context(), "Clerk webhook processing failed",
+				"request_id", RequestIDFromContext(r.Context()), "event_type", event.Type)
 			writeError(w, r, http.StatusServiceUnavailable, "service_unavailable", "service temporarily unavailable", nil)
 			return
 		}
