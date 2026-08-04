@@ -2,30 +2,41 @@
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import math
 import re
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, Iterable, NamedTuple
 
-POOL_METRICS = {
+POOL_GAUGES = {
     "database_pool_acquired_connections",
     "database_pool_idle_connections",
     "database_pool_total_connections",
     "database_pool_max_connections",
+    "http_requests_in_flight",
+}
+POOL_COUNTERS = {
     "database_pool_acquire_count_total",
     "database_pool_acquire_duration_seconds_total",
     "database_pool_empty_acquire_count_total",
     "database_pool_canceled_acquire_count_total",
-    "http_requests_in_flight",
 }
 HTTP_COUNTER = "http_requests_total"
 HTTP_BUCKET = "http_request_duration_seconds_bucket"
 HTTP_COUNT = "http_request_duration_seconds_count"
+PHASE_ORDER = {"before": 0, "during": 1, "after": 2}
+STRICT_REQUEST_COUNT_TOLERANCE = 0
 
-METRIC_RE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+a-zA-Z0-9.eE]+)$')
+METRIC_RE = re.compile(
+    r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+a-zA-Z0-9.eE]+)$'
+)
 LABEL_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"')
+SNAPSHOT_RE = re.compile(
+    r"^metrics-(before|during|after)-([0-9]{4})-(identity|organization)-([a-z0-9]{6,24})\.prom$"
+)
+REPLICA_KEY_RE = re.compile(r"^[a-f0-9]{12}$")
 FORBIDDEN = [
     re.compile(r"whsec_", re.IGNORECASE),
     re.compile(r"postgres(?:ql)?://", re.IGNORECASE),
@@ -46,6 +57,21 @@ class HTTPTarget(NamedTuple):
     service: str
     route: str
     method: str
+
+
+@dataclass(frozen=True)
+class SnapshotIdentity:
+    phase: str
+    sample: int
+    file_service: str
+    replica_key: str
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    identity: SnapshotIdentity
+    path: Path
+    metrics: tuple[MetricSample, ...]
 
 
 HTTP_TARGETS = {
@@ -99,15 +125,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--organization-max-conns", type=int, required=True)
     parser.add_argument("--organization-min-conns", type=int, required=True)
     parser.add_argument("--experimental-pool-override", action="store_true")
+    parser.add_argument("--disruption-metadata")
     parser.add_argument("--environment", default="local-docker")
     parser.add_argument("--limitation", action="append", default=[])
     return parser.parse_args()
 
 
-def parse_metric_samples(path: Path) -> list[MetricSample]:
+def parse_metric_samples(path: Path) -> tuple[MetricSample, ...]:
     samples: list[MetricSample] = []
     if not path.exists():
-        return samples
+        return tuple(samples)
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -123,132 +150,116 @@ def parse_metric_samples(path: Path) -> list[MetricSample]:
         if not math.isfinite(value):
             continue
         samples.append(MetricSample(name, dict(LABEL_RE.findall(labels_raw or "")), value))
-    return samples
+    return tuple(samples)
 
 
-def parse_prometheus(path: Path) -> dict[str, float]:
-    values: dict[str, float] = {}
-    for sample in parse_metric_samples(path):
-        if sample.name not in POOL_METRICS:
-            continue
-        if sample.name.startswith("database_pool_") and sample.labels.get("pool") != "runtime":
-            continue
-        values[sample.name] = sample.value
-    return values
-
-
-def phase_files(metrics_dir: Path, phase: str, service: str) -> list[Path]:
-    pattern = str(metrics_dir / f"metrics-{phase}-*-{service}.prom")
-    return [Path(item) for item in sorted(glob.glob(pattern))]
-
-
-def sum_snapshots(snapshots: list[dict[str, float]]) -> dict[str, float]:
-    total: dict[str, float] = {}
-    for snapshot in snapshots:
-        for name, value in snapshot.items():
-            total[name] = total.get(name, 0.0) + value
-    return total
-
-
-def sample_key(path: Path, phase: str) -> str:
-    match = re.match(
-        rf"metrics-{re.escape(phase)}-([^-]+)-\d+-(?:identity|organization)\.prom$",
-        path.name,
+def parse_snapshot_identity(path: Path) -> SnapshotIdentity | None:
+    match = SNAPSHOT_RE.match(path.name)
+    if match is None:
+        return None
+    phase, sample_raw, file_service, replica_key = match.groups()
+    return SnapshotIdentity(
+        phase=phase,
+        sample=int(sample_raw),
+        file_service=file_service,
+        replica_key=replica_key,
     )
-    return match.group(1) if match else path.name
 
 
-def aggregate_phase(metrics_dir: Path, phase: str, service: str) -> dict[str, Any]:
-    files = phase_files(metrics_dir, phase, service)
-    groups: dict[str, list[dict[str, float]]] = {}
-    for path in files:
-        snapshot = parse_prometheus(path)
-        if snapshot:
-            groups.setdefault(sample_key(path, phase), []).append(snapshot)
-    combined = [sum_snapshots(groups[key]) for key in sorted(groups)]
-    if not combined:
-        return {"sample_count": 0, "replica_snapshot_count": 0, "values": {}}
-    if phase != "during":
-        return {
-            "sample_count": len(combined),
-            "replica_snapshot_count": len(files),
-            "values": combined[-1],
-        }
-    maxima: dict[str, float] = {}
-    latest = combined[-1]
-    for snapshot in combined:
-        for name, value in snapshot.items():
-            maxima[name] = max(maxima.get(name, value), value)
-    return {
-        "sample_count": len(combined),
-        "replica_snapshot_count": len(files),
-        "max": maxima,
-        "last": latest,
-    }
+def load_snapshots(metrics_dir: Path, file_service: str | None = None) -> list[Snapshot]:
+    snapshots: list[Snapshot] = []
+    for path in metrics_dir.glob("metrics-*.prom"):
+        identity = parse_snapshot_identity(path)
+        if identity is None:
+            continue
+        if file_service is not None and identity.file_service != file_service:
+            continue
+        snapshots.append(Snapshot(identity, path, parse_metric_samples(path)))
+    snapshots.sort(
+        key=lambda snapshot: (
+            PHASE_ORDER[snapshot.identity.phase],
+            snapshot.identity.sample,
+            snapshot.identity.file_service,
+            snapshot.identity.replica_key,
+        )
+    )
+    return snapshots
 
 
-def pool_metrics(metrics_dir: Path) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for phase in ("before", "during", "after"):
-        result[phase] = {
-            "identity-service": aggregate_phase(metrics_dir, phase, "identity"),
-            "organization-service": aggregate_phase(metrics_dir, phase, "organization"),
-        }
-    return result
+def snapshots_by_replica(
+    metrics_dir: Path, file_service: str
+) -> dict[str, list[Snapshot]]:
+    result: dict[str, list[Snapshot]] = defaultdict(list)
+    for snapshot in load_snapshots(metrics_dir, file_service):
+        result[snapshot.identity.replica_key].append(snapshot)
+    return dict(result)
 
 
-def http_snapshot(paths: list[Path], target: HTTPTarget) -> dict[str, Any]:
-    statuses: dict[str, float] = {}
-    buckets: dict[float, float] = {}
-    count = 0.0
-    for path in paths:
-        for sample in parse_metric_samples(path):
-            labels = sample.labels
-            if (
-                labels.get("service") != target.service
-                or labels.get("route") != target.route
-                or labels.get("method") != target.method
-            ):
-                continue
-            if sample.name == HTTP_COUNTER:
-                status_class = labels.get("status_class")
-                if status_class:
-                    statuses[status_class] = statuses.get(status_class, 0.0) + sample.value
-            elif sample.name == HTTP_BUCKET:
-                raw_upper = labels.get("le")
-                if raw_upper is None:
-                    continue
-                try:
-                    upper = math.inf if raw_upper == "+Inf" else float(raw_upper)
-                except ValueError:
-                    continue
-                buckets[upper] = buckets.get(upper, 0.0) + sample.value
-            elif sample.name == HTTP_COUNT:
-                count += sample.value
-    return {"statuses": statuses, "buckets": buckets, "count": count}
-
-
-def http_series(metrics_dir: Path, target: HTTPTarget) -> list[dict[str, Any]]:
-    series: list[dict[str, Any]] = []
-    for phase in ("before", "during", "after"):
-        files = phase_files(metrics_dir, phase, target.file_service)
-        groups: dict[str, list[Path]] = {}
-        for path in files:
-            groups.setdefault(sample_key(path, phase), []).append(path)
-        for key in sorted(groups):
-            series.append(http_snapshot(groups[key], target))
-    return series
-
-
-def monotonic_increase(values: list[float]) -> float:
-    if len(values) < 2:
+def counter_increase(values: Iterable[float], starts_from_zero: bool) -> float:
+    ordered = list(values)
+    if not ordered:
         return 0.0
-    increase = 0.0
-    previous = values[0]
-    for current in values[1:]:
+    increase = ordered[0] if starts_from_zero else 0.0
+    previous = ordered[0]
+    for current in ordered[1:]:
         increase += current if current < previous else current - previous
         previous = current
     return max(increase, 0.0)
+
+
+def counter_series_increase(
+    snapshots: list[Snapshot],
+    extractor: Callable[[Snapshot], dict[Any, float]],
+) -> dict[Any, float]:
+    observations: dict[Any, list[tuple[str, float]]] = defaultdict(list)
+    for snapshot in snapshots:
+        for key, value in extractor(snapshot).items():
+            observations[key].append((snapshot.identity.phase, value))
+
+    increases: dict[Any, float] = {}
+    for key, values in observations.items():
+        baseline_present = any(phase == "before" for phase, _ in values)
+        increases[key] = counter_increase(
+            (value for _, value in values), starts_from_zero=not baseline_present
+        )
+    return increases
+
+
+def labels_match(sample: MetricSample, target: HTTPTarget) -> bool:
+    labels = sample.labels
+    return (
+        labels.get("service") == target.service
+        and labels.get("route") == target.route
+        and labels.get("method") == target.method
+    )
+
+
+def http_counter_values(snapshot: Snapshot, target: HTTPTarget) -> dict[tuple[str, str], float]:
+    values: dict[tuple[str, str], float] = {}
+    for sample in snapshot.metrics:
+        if not labels_match(sample, target):
+            continue
+        if sample.name == HTTP_COUNTER:
+            status_class = sample.labels.get("status_class")
+            if status_class:
+                values[(HTTP_COUNTER, status_class)] = sample.value
+        elif sample.name == HTTP_BUCKET:
+            upper = sample.labels.get("le")
+            if upper is not None:
+                values[(HTTP_BUCKET, upper)] = sample.value
+        elif sample.name == HTTP_COUNT:
+            values[(HTTP_COUNT, "count")] = sample.value
+    return values
+
+
+def parse_upper_bound(raw: str) -> float | None:
+    if raw == "+Inf":
+        return math.inf
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
 
 
 def histogram_quantile(quantile: float, buckets: dict[float, float]) -> float:
@@ -278,60 +289,164 @@ def histogram_quantile(quantile: float, buckets: dict[float, float]) -> float:
 
 
 def service_http_telemetry(
-    metrics_dir: Path, scenario: str, duration_seconds: float
+    metrics_dir: Path,
+    scenario: str,
+    duration_seconds: float,
 ) -> dict[str, Any]:
     target = HTTP_TARGETS.get(scenario)
     if target is None:
         return {"telemetry_complete": False, "reason": "unsupported_scenario"}
-    series = http_series(metrics_dir, target)
-    status_names = sorted({name for snapshot in series for name in snapshot["statuses"]})
-    status_distribution = {
-        name: int(
-            round(
-                monotonic_increase(
-                    [snapshot["statuses"].get(name, 0.0) for snapshot in series]
-                )
-            )
+
+    replica_series = snapshots_by_replica(metrics_dir, target.file_service)
+    status_totals: dict[str, float] = defaultdict(float)
+    bucket_totals: dict[float, float] = defaultdict(float)
+    histogram_count = 0.0
+    replica_request_increase: dict[str, int] = {}
+
+    for replica_key, snapshots in sorted(replica_series.items()):
+        increases = counter_series_increase(
+            snapshots, lambda snapshot: http_counter_values(snapshot, target)
         )
-        for name in status_names
-    }
+        replica_requests = 0.0
+        for (metric_name, dimension), value in increases.items():
+            if metric_name == HTTP_COUNTER:
+                status_totals[dimension] += value
+                replica_requests += value
+            elif metric_name == HTTP_BUCKET:
+                upper = parse_upper_bound(dimension)
+                if upper is not None:
+                    bucket_totals[upper] += value
+            elif metric_name == HTTP_COUNT:
+                histogram_count += value
+        if replica_requests > 0:
+            replica_request_increase[replica_key] = int(round(replica_requests))
+
     status_distribution = {
-        name: count for name, count in status_distribution.items() if count > 0
+        name: int(round(count))
+        for name, count in sorted(status_totals.items())
+        if count > 0
     }
     request_count = sum(status_distribution.values())
-
-    bounds = sorted({bound for snapshot in series for bound in snapshot["buckets"]})
-    bucket_increases = {
-        bound: monotonic_increase(
-            [snapshot["buckets"].get(bound, 0.0) for snapshot in series]
-        )
-        for bound in bounds
-    }
-    histogram_count = monotonic_increase([snapshot["count"] for snapshot in series])
+    histogram_count_int = int(round(histogram_count))
     errors = sum(
         count
         for status_class, count in status_distribution.items()
         if status_class in {"4xx", "5xx"}
     )
-    telemetry_complete = request_count > 0 and histogram_count > 0 and bool(bucket_increases)
+    telemetry_complete = (
+        histogram_count_int == request_count
+        and (request_count == 0 or bool(bucket_totals))
+    )
     return {
         "telemetry_complete": telemetry_complete,
         "service": target.service,
         "route": target.route,
         "method": target.method,
-        "sample_count": len(series),
+        "replica_series_count": len(replica_series),
+        "replica_request_increase": replica_request_increase,
         "request_count": request_count,
-        "histogram_count": int(round(histogram_count)),
+        "histogram_count": histogram_count_int,
         "throughput_requests_per_second": round(
             request_count / duration_seconds if duration_seconds > 0 else 0.0, 6
         ),
         "latency_ms": {
-            "p50": round(histogram_quantile(0.50, bucket_increases) * 1000.0, 6),
-            "p95": round(histogram_quantile(0.95, bucket_increases) * 1000.0, 6),
-            "p99": round(histogram_quantile(0.99, bucket_increases) * 1000.0, 6),
+            "p50": round(histogram_quantile(0.50, dict(bucket_totals)) * 1000.0, 6),
+            "p95": round(histogram_quantile(0.95, dict(bucket_totals)) * 1000.0, 6),
+            "p99": round(histogram_quantile(0.99, dict(bucket_totals)) * 1000.0, 6),
         },
         "error_rate": round(errors / request_count if request_count > 0 else 0.0, 8),
         "status_class_distribution": status_distribution,
+    }
+
+
+def pool_counter_values(snapshot: Snapshot) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for sample in snapshot.metrics:
+        if sample.name not in POOL_COUNTERS:
+            continue
+        if sample.labels.get("pool") != "runtime":
+            continue
+        values[sample.name] = sample.value
+    return values
+
+
+def pool_counter_deltas(metrics_dir: Path, file_service: str) -> dict[str, float]:
+    totals: dict[str, float] = defaultdict(float)
+    for snapshots in snapshots_by_replica(metrics_dir, file_service).values():
+        for name, increase in counter_series_increase(snapshots, pool_counter_values).items():
+            totals[name] += increase
+    return {name: round(totals.get(name, 0.0), 9) for name in sorted(POOL_COUNTERS)}
+
+
+def pool_gauge_values(snapshot: Snapshot) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for sample in snapshot.metrics:
+        if sample.name not in POOL_GAUGES:
+            continue
+        if sample.name.startswith("database_pool_") and sample.labels.get("pool") != "runtime":
+            continue
+        values[sample.name] = sample.value
+    return values
+
+
+def aggregate_gauge_phase(
+    metrics_dir: Path, phase: str, file_service: str
+) -> dict[str, Any]:
+    snapshots = [
+        snapshot
+        for snapshot in load_snapshots(metrics_dir, file_service)
+        if snapshot.identity.phase == phase
+    ]
+    by_sample: dict[int, list[Snapshot]] = defaultdict(list)
+    for snapshot in snapshots:
+        by_sample[snapshot.identity.sample].append(snapshot)
+
+    combined: list[dict[str, float]] = []
+    for sample in sorted(by_sample):
+        summed: dict[str, float] = defaultdict(float)
+        for snapshot in by_sample[sample]:
+            for name, value in pool_gauge_values(snapshot).items():
+                summed[name] += value
+        combined.append(dict(summed))
+
+    if not combined:
+        return {"sample_count": 0, "replica_snapshot_count": 0, "values": {}}
+    if phase != "during":
+        return {
+            "sample_count": len(combined),
+            "replica_snapshot_count": len(snapshots),
+            "values": combined[-1],
+        }
+
+    maxima: dict[str, float] = {}
+    for sample in combined:
+        for name, value in sample.items():
+            maxima[name] = max(maxima.get(name, value), value)
+    return {
+        "sample_count": len(combined),
+        "replica_snapshot_count": len(snapshots),
+        "max": maxima,
+        "last": combined[-1],
+    }
+
+
+def pool_metrics(metrics_dir: Path) -> dict[str, Any]:
+    services = {
+        "identity-service": "identity",
+        "organization-service": "organization",
+    }
+    gauges: dict[str, Any] = {}
+    for phase in ("before", "during", "after"):
+        gauges[phase] = {
+            service: aggregate_gauge_phase(metrics_dir, phase, file_service)
+            for service, file_service in services.items()
+        }
+    return {
+        "gauges": gauges,
+        "counter_deltas": {
+            service: pool_counter_deltas(metrics_dir, file_service)
+            for service, file_service in services.items()
+        },
     }
 
 
@@ -347,22 +462,93 @@ def safe_number(value: Any, default: float = 0.0) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
+def load_disruption_metadata(path: str | None) -> dict[str, Any]:
+    if not path:
+        return {"mode": "none"}
+    metadata_path = Path(path)
+    if not metadata_path.exists():
+        return {"mode": "none"}
+    value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("disruption metadata must be an object")
+    allowed_keys = {
+        "mode",
+        "target_service",
+        "restarted_replica_key",
+        "non_target_replica_keys",
+        "non_target_remained_running",
+        "target_healthy_after_restart",
+        "expected_replica_count_restored",
+        "traffic_active_during_restart",
+    }
+    if set(value) - allowed_keys:
+        raise ValueError("disruption metadata contains unsupported fields")
+    replica_key = value.get("restarted_replica_key")
+    if replica_key is not None and not REPLICA_KEY_RE.fullmatch(str(replica_key)):
+        raise ValueError("disruption metadata contains an invalid replica key")
+    non_targets = value.get("non_target_replica_keys", [])
+    if not isinstance(non_targets, list) or any(
+        not REPLICA_KEY_RE.fullmatch(str(item)) for item in non_targets
+    ):
+        raise ValueError("disruption metadata contains invalid non-target replica keys")
+    return value
+
+
+def request_reconciliation(
+    profile: str,
+    client_request_count: int,
+    service_request_count: int,
+    service_histogram_count: int,
+) -> dict[str, Any]:
+    gateway_only = max(client_request_count - service_request_count, 0)
+    histogram_matches = service_histogram_count == service_request_count
+    service_not_above_client = service_request_count <= client_request_count
+    if profile == "dependency-degradation":
+        complete = histogram_matches and service_not_above_client
+        tolerance = None
+        policy = "gateway-only gaps allowed during explicit disruption"
+    else:
+        complete = (
+            histogram_matches
+            and abs(client_request_count - service_request_count)
+            <= STRICT_REQUEST_COUNT_TOLERANCE
+        )
+        tolerance = STRICT_REQUEST_COUNT_TOLERANCE
+        policy = "exact client/service match required"
+    return {
+        "gateway_or_transport_only_failures": gateway_only,
+        "request_count_reconciliation_complete": complete,
+        "request_count_tolerance": tolerance,
+        "request_count_reconciliation_policy": policy,
+    }
+
+
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     summary = json.loads(Path(args.k6_summary).read_text(encoding="utf-8"))
     duration_seconds = safe_number(summary.get("duration_ms")) / 1000.0
-    request_count = int(safe_number(summary.get("request_count")))
-    throughput = request_count / duration_seconds if duration_seconds > 0 else 0.0
+    client_request_count = int(safe_number(summary.get("request_count")))
+    throughput = client_request_count / duration_seconds if duration_seconds > 0 else 0.0
     thresholds = {str(key): bool(value) for key, value in summary.get("thresholds", {}).items()}
     limitations = args.limitation or [
         "GitHub-hosted and local Docker results are harness baselines, not production capacity claims.",
         "Shared runner CPU, storage, and network scheduling can vary between runs.",
         "Representative production pool sizing requires deployment-environment measurements.",
     ]
-    server_http = service_http_telemetry(
+    service_http = service_http_telemetry(
         Path(args.metrics_dir), args.scenario, duration_seconds
     )
+    service_request_count = int(service_http.get("request_count", 0))
+    service_histogram_count = int(service_http.get("histogram_count", 0))
+    reconciliation = request_reconciliation(
+        args.profile,
+        client_request_count,
+        service_request_count,
+        service_histogram_count,
+    )
+    disruption = load_disruption_metadata(getattr(args, "disruption_metadata", None))
+
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "git_sha": args.git_sha,
         "scenario": args.scenario,
         "load_profile": args.profile,
@@ -383,7 +569,20 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             },
         },
         "duration_seconds": round(duration_seconds, 6),
-        "request_count": request_count,
+        "request_count": client_request_count,
+        "client_request_count": client_request_count,
+        "service_request_count": service_request_count,
+        "service_histogram_count": service_histogram_count,
+        "gateway_or_transport_only_failures": reconciliation[
+            "gateway_or_transport_only_failures"
+        ],
+        "request_count_reconciliation_complete": reconciliation[
+            "request_count_reconciliation_complete"
+        ],
+        "request_count_tolerance": reconciliation["request_count_tolerance"],
+        "request_count_reconciliation_policy": reconciliation[
+            "request_count_reconciliation_policy"
+        ],
         "throughput_requests_per_second": round(throughput, 6),
         "latency_ms": {
             key: round(safe_number(value), 6)
@@ -393,11 +592,15 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "checks_rate": round(safe_number(summary.get("checks_rate")), 8),
         "dropped_iterations": int(safe_number(summary.get("dropped_iterations"))),
         "status_distribution": summary.get("status_distribution", {}),
-        "service_http_telemetry": server_http,
+        "service_http_telemetry": service_http,
         "pool_metrics": pool_metrics(Path(args.metrics_dir)),
+        "disruption": disruption,
         "thresholds": thresholds,
-        "passed": threshold_passed(thresholds)
-        and server_http.get("telemetry_complete") is True,
+        "passed": (
+            threshold_passed(thresholds)
+            and service_http.get("telemetry_complete") is True
+            and reconciliation["request_count_reconciliation_complete"] is True
+        ),
         "test_environment_limitations": limitations,
     }
     validate_sanitized(report)
@@ -419,21 +622,17 @@ def markdown_table(rows: list[tuple[str, Any]]) -> str:
 
 def pool_markdown(report: dict[str, Any]) -> str:
     lines = [
-        "| Phase | Service | Samples | Acquired | Idle | Total | Max | Acquire count | Acquire wait seconds | Empty acquires | Canceled acquires | In flight |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Phase | Service | Samples | Acquired | Idle | Total | Max | In flight |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
-    metrics = report["pool_metrics"]
+    gauges = report["pool_metrics"]["gauges"]
     for phase in ("before", "during", "after"):
         for service in ("identity-service", "organization-service"):
-            phase_data = metrics[phase][service]
-            values = (
-                phase_data.get("max")
-                if phase == "during"
-                else phase_data.get("values")
-            )
+            phase_data = gauges[phase][service]
+            values = phase_data.get("max") if phase == "during" else phase_data.get("values")
             values = values or {}
             lines.append(
-                "| {phase} | {service} | {samples} | {acquired} | {idle} | {total} | {max_conn} | {acquire_count} | {acquire_wait} | {empty} | {canceled} | {in_flight} |".format(
+                "| {phase} | {service} | {samples} | {acquired} | {idle} | {total} | {max_conn} | {in_flight} |".format(
                     phase=phase,
                     service=service,
                     samples=phase_data.get("sample_count", 0),
@@ -441,17 +640,28 @@ def pool_markdown(report: dict[str, Any]) -> str:
                     idle=values.get("database_pool_idle_connections", 0),
                     total=values.get("database_pool_total_connections", 0),
                     max_conn=values.get("database_pool_max_connections", 0),
-                    acquire_count=values.get("database_pool_acquire_count_total", 0),
-                    acquire_wait=values.get(
-                        "database_pool_acquire_duration_seconds_total", 0
-                    ),
-                    empty=values.get("database_pool_empty_acquire_count_total", 0),
-                    canceled=values.get(
-                        "database_pool_canceled_acquire_count_total", 0
-                    ),
                     in_flight=values.get("http_requests_in_flight", 0),
                 )
             )
+
+    lines.extend(
+        [
+            "",
+            "| Service | Acquire count delta | Acquire wait seconds delta | Empty acquire delta | Canceled acquire delta |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for service in ("identity-service", "organization-service"):
+        counters = report["pool_metrics"]["counter_deltas"][service]
+        lines.append(
+            "| {service} | {acquire} | {wait} | {empty} | {canceled} |".format(
+                service=service,
+                acquire=counters.get("database_pool_acquire_count_total", 0),
+                wait=counters.get("database_pool_acquire_duration_seconds_total", 0),
+                empty=counters.get("database_pool_empty_acquire_count_total", 0),
+                canceled=counters.get("database_pool_canceled_acquire_count_total", 0),
+            )
+        )
     return "\n".join(lines)
 
 
@@ -469,13 +679,15 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- {item}" for item in report["test_environment_limitations"]
     )
     pool = report["database_pool_configuration"]
-    server = report["service_http_telemetry"]
-    server_status = ", ".join(
+    service = report["service_http_telemetry"]
+    service_status = ", ".join(
         f"{name}={count}"
-        for name, count in sorted(
-            server.get("status_class_distribution", {}).items()
-        )
+        for name, count in sorted(service.get("status_class_distribution", {}).items())
     ) or "none"
+    disruption = report.get("disruption", {"mode": "none"})
+    disruption_rows = "\n".join(
+        f"- {key}: `{value}`" for key, value in sorted(disruption.items())
+    )
     return f"""# BridgeWorks Load-Test Result
 
 - Git SHA: `{report['git_sha']}`
@@ -489,7 +701,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 {markdown_table([
     ('Duration seconds', report['duration_seconds']),
-    ('Request count', report['request_count']),
+    ('Client request count', report['client_request_count']),
     ('Throughput requests/second', report['throughput_requests_per_second']),
     ('Error rate', report['error_rate']),
     ('Checks rate', report['checks_rate']),
@@ -500,22 +712,37 @@ def render_markdown(report: dict[str, Any]) -> str:
     ('Max latency ms', latency.get('max', 0)),
 ])}
 
-## Service-side PR #8 HTTP telemetry
-
-- Service: `{server.get('service', 'unknown')}`
-- Route: `{server.get('route', 'unknown')}`
-- Method: `{server.get('method', 'unknown')}`
-- Complete: `{str(server.get('telemetry_complete', False)).lower()}`
-- Status classes: `{server_status}`
+## Client/service reconciliation
 
 {markdown_table([
-    ('Request count delta', server.get('request_count', 0)),
-    ('Histogram count delta', server.get('histogram_count', 0)),
-    ('Throughput requests/second', server.get('throughput_requests_per_second', 0)),
-    ('Error rate', server.get('error_rate', 0)),
-    ('p50 latency ms', server.get('latency_ms', {}).get('p50', 0)),
-    ('p95 latency ms', server.get('latency_ms', {}).get('p95', 0)),
-    ('p99 latency ms', server.get('latency_ms', {}).get('p99', 0)),
+    ('Client request count', report['client_request_count']),
+    ('Service request count', report['service_request_count']),
+    ('Service histogram count', report['service_histogram_count']),
+    ('Gateway or transport-only failures', report['gateway_or_transport_only_failures']),
+    ('Reconciliation complete', str(report['request_count_reconciliation_complete']).lower()),
+    ('Strict normal-profile tolerance', report['request_count_tolerance']),
+])}
+
+Policy: {report['request_count_reconciliation_policy']}.
+
+## Service-side PR #8 HTTP telemetry
+
+- Service: `{service.get('service', 'unknown')}`
+- Route: `{service.get('route', 'unknown')}`
+- Method: `{service.get('method', 'unknown')}`
+- Complete: `{str(service.get('telemetry_complete', False)).lower()}`
+- Replica series: `{service.get('replica_series_count', 0)}`
+- Per-replica request increases: `{json.dumps(service.get('replica_request_increase', {}), sort_keys=True)}`
+- Status classes: `{service_status}`
+
+{markdown_table([
+    ('Request count delta', service.get('request_count', 0)),
+    ('Histogram count delta', service.get('histogram_count', 0)),
+    ('Throughput requests/second', service.get('throughput_requests_per_second', 0)),
+    ('Error rate', service.get('error_rate', 0)),
+    ('p50 latency ms', service.get('latency_ms', {}).get('p50', 0)),
+    ('p95 latency ms', service.get('latency_ms', {}).get('p95', 0)),
+    ('p99 latency ms', service.get('latency_ms', {}).get('p99', 0)),
 ])}
 
 ## Client status distribution
@@ -531,7 +758,11 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 {pool_markdown(report)}
 
-For the `during` phase, gauge values are maxima across samples; cumulative counters are the maximum observed cumulative values. Use before/after values to calculate run deltas.
+Gauge values are summed across the replicas present in each scrape and the `during` phase reports the maximum summed value. Counter deltas are calculated independently for each stable replica key, including per-replica reset detection, and only then summed across replicas.
+
+## Disruption metadata
+
+{disruption_rows}
 
 ## Thresholds
 
