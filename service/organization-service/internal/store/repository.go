@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Beginner interface {
@@ -83,7 +84,11 @@ func (r *Repository) ProcessEvent(ctx context.Context, event organizationsync.Ev
 	_, err = queries.InsertWebhookEvent(ctx, sqlcgen.InsertWebhookEventParams{
 		EventID: event.EventID, EventType: event.Type,
 		AggregateType: event.AggregateType, AggregateID: event.AggregateID,
-		ClerkOrganizationID: event.ClerkOrganizationID, OccurredAt: event.OccurredAt,
+		ClerkOrganizationID: event.ClerkOrganizationID,
+		OccurredAt: pgtype.Timestamptz{
+			Time:  event.OccurredAt.UTC(),
+			Valid: true,
+		},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -107,7 +112,9 @@ func (r *Repository) ProcessEvent(ctx context.Context, event organizationsync.Ev
 		return safeerr.Wrap("load latest organization aggregate event", latestErr)
 	}
 	if latestErr == nil && organizationsync.IsStale(event, organizationsync.Event{
-		EventID: latest.EventID, Type: latest.EventType, OccurredAt: latest.OccurredAt,
+		EventID: latest.EventID,
+		Type:    latest.EventType,
+		OccurredAt: latest.OccurredAt.Time.UTC(),
 	}) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return safeerr.Wrap("commit stale organization event", commitErr)
