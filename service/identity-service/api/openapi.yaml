@@ -1,14 +1,14 @@
 openapi: 3.1.0
 info:
   title: BridgeWorks Identity Service API
-  version: 0.4.0
+  version: 0.4.1
   description: Identity health, Clerk webhook synchronization, and authenticated current-user projection exposed through APISIX.
 paths:
   /api/v1/me:
     get:
       operationId: getCurrentIdentityUser
       summary: Return the authenticated BridgeWorks identity projection
-      description: Requires an Authorization header containing a valid Clerk session token as a Bearer credential. Clerk proves identity; Identity Service enforces the local account lifecycle.
+      description: Requires an Authorization header containing a valid Clerk session token as a Bearer credential. Clerk proves identity; Identity Service enforces the local account lifecycle. Browser origins configured in CLERK_AUTHORIZED_PARTIES receive route-scoped CORS headers. Every response is non-cacheable and varies on Authorization.
       security:
         - ClerkSessionToken: []
       responses:
@@ -17,6 +17,10 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
           content:
             application/json:
               schema:
@@ -26,6 +30,12 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
+            WWW-Authenticate:
+              $ref: "#/components/headers/BearerChallenge"
           content:
             application/json:
               schema:
@@ -42,6 +52,10 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
           content:
             application/json:
               schema:
@@ -64,6 +78,10 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
             Retry-After:
               description: Suggested delay in seconds before retrying the current-user request.
               schema:
@@ -85,6 +103,10 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
           content:
             application/json:
               schema:
@@ -194,6 +216,23 @@ components:
       description: Request correlation identifier generated or forwarded by APISIX.
       schema:
         type: string
+    CurrentUserCacheControl:
+      description: Prevents storage of the authenticated current-user response.
+      schema:
+        type: string
+        const: no-store
+    CurrentUserVary:
+      description: Indicates that the current-user representation depends on the Authorization request header. Gateway CORS processing may append Origin.
+      schema:
+        type: string
+        examples:
+          - Authorization
+          - Authorization, Origin
+    BearerChallenge:
+      description: Stable Bearer authentication challenge without token validation details.
+      schema:
+        type: string
+        const: 'Bearer realm="bridgeworks"'
   responses:
     ErrorResponse:
       description: Request failed
