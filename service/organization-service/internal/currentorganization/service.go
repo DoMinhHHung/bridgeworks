@@ -41,7 +41,6 @@ type Membership struct {
 
 type IdentityReader interface {
 	Resolve(context.Context, string, string) (Identity, error)
-	CloseIdleConnections()
 }
 
 type Repository interface {
