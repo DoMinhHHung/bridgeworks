@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/harness.sh"
 profile="${1:-smoke}"
 [[ "${profile}" == "smoke" ]] || loadtest_die "run-suite supports only the bounded smoke profile"
 trap 'exit_code=$?; trap - EXIT; loadtest_cleanup "${exit_code}"; exit "${exit_code}"' EXIT
-loadtest_initialize smoke none
+loadtest_initialize smoke identity_me none
 
 scenarios=(
   identity_me
