@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/clerkwebhook"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/observability"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
 	svix "github.com/svix/svix-webhooks/go"
 )
 
@@ -31,6 +33,30 @@ func TestClerkWebhookHandlerAcceptsValidRawPayload(t *testing.T) {
 		t.Fatalf("processor state: %+v", processor)
 	}
 	assertNoSensitiveWebhookData(t, logs, supportedPayload(), "verified@example.test")
+}
+
+func TestClerkWebhookHandlerWithMetricsUsesApplicationOutcome(t *testing.T) {
+	processor := &recordingProcessor{result: usersync.ResultDuplicate}
+	metrics := &fakeMetrics{}
+	handler := RequestID(clerkWebhookHandlerWithMetrics(
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		staticWebhookVerifier{event: clerkwebhook.Event{Supported: true}},
+		processor,
+		metrics,
+		1<<20,
+		time.Second,
+	))
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/clerk", strings.NewReader("{}"))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if len(metrics.webhooks) != 1 || metrics.webhooks[0] != [2]string{observability.AggregateUser, observability.OutcomeDuplicate} {
+		t.Fatalf("webhook metrics = %#v", metrics.webhooks)
+	}
 }
 
 func TestClerkWebhookHandlerRejectsMissingEachSvixHeader(t *testing.T) {
@@ -201,24 +227,49 @@ func supportedPayload() []byte {
 	return []byte(`{"type":"user.created","timestamp":1785744000000,"data":{"id":"user_handler_test","primary_email_address_id":"email_primary","email_addresses":[{"id":"email_primary","email_address":"verified@example.test","verification":{"status":"verified"}}]}}`)
 }
 
+type staticWebhookVerifier struct {
+	event clerkwebhook.Event
+	err   error
+}
+
+func (v staticWebhookVerifier) VerifyAndParse([]byte, http.Header) (clerkwebhook.Event, error) {
+	return v.event, v.err
+}
+
 type recordingProcessor struct {
 	calls               int
 	event               clerkwebhook.Event
+	result              usersync.Result
 	err                 error
 	waitForCancellation bool
 	errSeen             error
 }
 
 func (p *recordingProcessor) Process(ctx context.Context, event clerkwebhook.Event) error {
+	_, err := p.process(ctx, event)
+	return err
+}
+
+func (p *recordingProcessor) ProcessWithResult(ctx context.Context, event clerkwebhook.Event) (usersync.Result, error) {
+	return p.process(ctx, event)
+}
+
+func (p *recordingProcessor) process(ctx context.Context, event clerkwebhook.Event) (usersync.Result, error) {
 	p.calls++
 	p.event = event
 	if p.waitForCancellation {
 		<-ctx.Done()
 		p.errSeen = ctx.Err()
-		return ctx.Err()
+		return "", ctx.Err()
 	}
-	return p.err
+	if p.result == "" {
+		p.result = usersync.ResultProcessed
+	}
+	return p.result, p.err
 }
+
+var _ ClerkWebhookProcessor = (*recordingProcessor)(nil)
+var _ ClerkWebhookOutcomeProcessor = (*recordingProcessor)(nil)
 
 type readCloser struct{ *bytes.Reader }
 
