@@ -1,31 +1,45 @@
 # Production Readiness Roadmap
 
-This document records focused operational work for Identity Service and Organization Service. PR #8 implements the bounded metrics and access-log foundation only; capacity, traffic protection, tracing, caching, and retention remain separate work that requires measured rollout criteria.
+This document records focused operational work for Identity Service and Organization Service. PR #8 implements bounded metrics and structured access logs. PR #9 adds the repeatable load-test harness and deterministic connection-budget methodology. Actual production pool sizing, traffic protection, tracing, caching, and retention remain separate work with measured rollout criteria.
 
 ## Group A — Traffic protection and capacity
 
-### Load testing before pool changes — pending
+### Load-test harness and capacity methodology — completed in PR #9
 
-Do not raise PostgreSQL pool defaults from intuition or copy values from another deployment. Establish a repeatable load-test target first:
+The checked-in load-test harness now provides isolated profiles for:
 
-- representative authenticated read traffic;
-- Clerk webhook bursts and retries;
-- expected p50, p95, and p99 latency targets;
-- acceptable PostgreSQL connection wait time;
-- expected service replica count;
-- failure tests with one database connection unavailable or one replica restarting.
+- Identity authenticated `/me`;
+- Organization current organization and current membership;
+- the private Organization-to-Identity dependency;
+- Clerk user webhook bursts and retries;
+- Clerk organization and membership webhook bursts and retries;
+- dependency degradation through Identity unavailability/delay, experimental constrained pools, and service restarts.
 
-Pool sizing must be derived from measured concurrency and the database connection budget. A starting budget formula is:
+The PR smoke suite validates harness correctness with loose thresholds. Baseline, burst, saturation, and degradation profiles are manually dispatched. Each scenario produces sanitized JSON and Markdown containing the tested SHA, load shape, throughput, p50/p95/p99, error/status distribution, replica and pool configuration, thresholds, environment limitations, and before/during/after HTTP in-flight plus PostgreSQL pool telemetry.
+
+The deterministic calculator requires the PostgreSQL/Supabase maximum, reserved admin and migration connections, operational headroom, per-service allocations, and maximum replicas. It calculates separate Identity and Organization ceilings:
 
 ```text
 per-replica max connections
-  <= floor((database connection limit - reserved admin/migration/headroom connections)
-           / maximum service replica count)
+  <= floor(service connection budget / maximum service replica count)
 ```
 
-Identity and Organization need separate budgets. Migration jobs must use separately budgeted credentials and connections. Any pool increase requires evidence that connection wait, query latency, and database CPU support the change.
+Run and interpretation guidance lives in [`load-test-capacity-runbook.md`](load-test-capacity-runbook.md).
 
-PR #8 exposes the pool telemetry required for this decision but deliberately leaves all pool defaults unchanged.
+### Representative production pool sizing — pending
+
+Do not raise PostgreSQL pool defaults from CI measurements, intuition, or values copied from another deployment. GitHub-hosted runners validate repeatability and relative behavior only; they are not production capacity claims.
+
+Before changing pool defaults:
+
+- run the same baseline and degradation scenarios in a representative deployment environment;
+- use the real Supabase/PostgreSQL connection limit and reserved operational budget;
+- test expected maximum replica counts;
+- compare p50/p95/p99, throughput, error distribution, acquire wait, empty/canceled acquisitions, database CPU, query latency, and lock pressure;
+- document the candidate value as experimental until evidence is reviewed;
+- define rollback criteria and the previous known-good pool configuration.
+
+`DATABASE_MAX_CONNS`, `DATABASE_MIN_CONNS`, `ORGANIZATION_DATABASE_MAX_CONNS`, and `ORGANIZATION_DATABASE_MIN_CONNS` remain unchanged by PR #9.
 
 ### APISIX rate limiting — pending
 
@@ -96,7 +110,7 @@ database_pool_empty_acquire_count_total
 database_pool_canceled_acquire_count_total
 ```
 
-Labels are restricted to `service` and `pool=runtime`. Nil or closed pool handling is defensive and cannot panic the request path. Collector execution does not participate in readiness.
+Labels are restricted to `service` and `pool=runtime`. Nil pool handling emits no fake metric and cannot affect the request path. Collector execution does not participate in readiness.
 
 ### Private metrics listeners — completed in PR #8
 
@@ -164,8 +178,8 @@ Identity and Organization currently use static configured public verification ke
 
 The static-key design has limited overlap support. A future design should evaluate multi-key verification or Clerk JWKS retrieval with bounded caching, issuer validation, failure fallback, and rotation observability before implementation.
 
-### Observability correction status
+### Current operational status
 
-The completed observability foundation enforces webhook outcomes through compile-time application interfaces, bounds arbitrary HTTP methods to the Prometheus label `OTHER`, validates service-specific webhook aggregate allowlists, and does not silently recover pool-collector programming panics. Private-listener isolation and shutdown ordering are covered by regression tests. Health access records remain debug-only and are normally absent when services run at info level.
+The observability foundation enforces compile-time webhook outcomes, bounded HTTP method and route labels, service-specific webhook aggregates, private metrics isolation, and deterministic shutdown ordering. PR #9 consumes that telemetry through a repeatable load-test and capacity-reporting harness.
 
-This does not complete load testing, pool sizing, rate limiting, Upstash Redis cache-aside, OpenTelemetry, or inbox retention.
+This completes the harness and methodology only. It does not complete representative production pool sizing, rate limiting, Upstash Redis cache-aside, OpenTelemetry, or inbox retention.
