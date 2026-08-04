@@ -15,7 +15,7 @@ SPEC.loader.exec_module(report)
 
 
 class ReportTests(unittest.TestCase):
-    def test_builds_sanitized_report_with_pool_phases(self) -> None:
+    def test_builds_sanitized_report_with_http_and_pool_phases(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             summary = root / "k6-summary.json"
@@ -36,20 +36,35 @@ class ReportTests(unittest.TestCase):
             )
             metrics = root / "metrics"
             metrics.mkdir()
-            fixture = (
-                'database_pool_acquired_connections{pool="runtime",service="identity-service"} 1\n'
-                'database_pool_idle_connections{pool="runtime",service="identity-service"} 2\n'
-                'database_pool_total_connections{pool="runtime",service="identity-service"} 3\n'
-                'database_pool_max_connections{pool="runtime",service="identity-service"} 5\n'
-                'database_pool_acquire_count_total{pool="runtime",service="identity-service"} 7\n'
-                'database_pool_acquire_duration_seconds_total{pool="runtime",service="identity-service"} 0.5\n'
-                'database_pool_empty_acquire_count_total{pool="runtime",service="identity-service"} 1\n'
-                'database_pool_canceled_acquire_count_total{pool="runtime",service="identity-service"} 0\n'
-                'http_requests_in_flight{service="identity-service"} 2\n'
+
+            def fixture(requests: int, acquired: int) -> str:
+                return (
+                    f'http_requests_total{{method="GET",route="/me",service="identity-service",status_class="2xx"}} {requests}\n'
+                    f'http_request_duration_seconds_count{{method="GET",route="/me",service="identity-service"}} {requests}\n'
+                    f'http_request_duration_seconds_bucket{{le="0.005",method="GET",route="/me",service="identity-service"}} {requests // 4}\n'
+                    f'http_request_duration_seconds_bucket{{le="0.01",method="GET",route="/me",service="identity-service"}} {requests // 2}\n'
+                    f'http_request_duration_seconds_bucket{{le="0.025",method="GET",route="/me",service="identity-service"}} {requests}\n'
+                    f'http_request_duration_seconds_bucket{{le="+Inf",method="GET",route="/me",service="identity-service"}} {requests}\n'
+                    f'database_pool_acquired_connections{{pool="runtime",service="identity-service"}} {acquired}\n'
+                    'database_pool_idle_connections{pool="runtime",service="identity-service"} 2\n'
+                    'database_pool_total_connections{pool="runtime",service="identity-service"} 3\n'
+                    'database_pool_max_connections{pool="runtime",service="identity-service"} 5\n'
+                    f'database_pool_acquire_count_total{{pool="runtime",service="identity-service"}} {requests + 7}\n'
+                    'database_pool_acquire_duration_seconds_total{pool="runtime",service="identity-service"} 0.5\n'
+                    'database_pool_empty_acquire_count_total{pool="runtime",service="identity-service"} 1\n'
+                    'database_pool_canceled_acquire_count_total{pool="runtime",service="identity-service"} 0\n'
+                    'http_requests_in_flight{service="identity-service"} 2\n'
+                )
+
+            (metrics / "metrics-before-0000-00-identity.prom").write_text(
+                fixture(0, 0), encoding="utf-8"
             )
-            for phase in ("before", "after"):
-                (metrics / f"metrics-{phase}-identity.prom").write_text(fixture, encoding="utf-8")
-            (metrics / "metrics-during-0001-identity.prom").write_text(fixture, encoding="utf-8")
+            (metrics / "metrics-during-0001-00-identity.prom").write_text(
+                fixture(10, 1), encoding="utf-8"
+            )
+            (metrics / "metrics-after-0000-00-identity.prom").write_text(
+                fixture(20, 0), encoding="utf-8"
+            )
 
             args = argparse.Namespace(
                 k6_summary=str(summary),
@@ -72,6 +87,13 @@ class ReportTests(unittest.TestCase):
             result = report.build_report(args)
             self.assertEqual(result["throughput_requests_per_second"], 10)
             self.assertTrue(result["passed"])
+            self.assertEqual(result["schema_version"], 2)
+            self.assertEqual(result["service_http_telemetry"]["request_count"], 20)
+            self.assertEqual(
+                result["service_http_telemetry"]["status_class_distribution"],
+                {"2xx": 20},
+            )
+            self.assertGreater(result["service_http_telemetry"]["latency_ms"]["p50"], 0)
             self.assertEqual(
                 result["pool_metrics"]["during"]["identity-service"]["max"]["database_pool_total_connections"],
                 3,
@@ -94,6 +116,9 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(before["values"]["database_pool_total_connections"], 5)
             self.assertEqual(during["max"]["database_pool_total_connections"], 7)
             self.assertEqual(during["sample_count"], 2)
+
+    def test_counter_increase_handles_service_restart(self) -> None:
+        self.assertEqual(report.monotonic_increase([10, 15, 2, 7]), 12)
 
     def test_rejects_sensitive_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "forbidden"):
