@@ -87,11 +87,19 @@ routes:
     uri: /api/v1/me
     methods:
       - GET
+      - OPTIONS
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After"
+        max_age: 600
+        allow_credential: false
       proxy-rewrite:
         uri: /me
     upstream:
