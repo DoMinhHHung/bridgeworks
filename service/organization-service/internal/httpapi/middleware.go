@@ -49,7 +49,7 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 					logger.ErrorContext(r.Context(), "panic recovered",
 						"request_id", RequestIDFromContext(r.Context()),
 						"method", r.Method,
-						"route", r.URL.Path,
+						"route", routePattern(r),
 						"panic_type", fmt.Sprintf("%T", recovered),
 					)
 					writeError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
