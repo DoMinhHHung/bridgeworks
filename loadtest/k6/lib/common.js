@@ -166,6 +166,7 @@ export function buildOptions(profile) {
   options.noConnectionReuse = false;
   options.discardResponseBodies = true;
   options.userAgent = 'bridgeworks-loadtest';
+  options.summaryTrendStats = ['min', 'med', 'p(50)', 'p(95)', 'p(99)', 'max'];
   return options;
 }
 
