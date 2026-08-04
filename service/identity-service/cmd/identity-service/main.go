@@ -141,12 +141,12 @@ func run(bootstrapLogger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen application HTTP: %w", err)
 	}
-	defer applicationListener.Close()
+	defer func() { _ = applicationListener.Close() }()
 	metricsListener, err := net.Listen("tcp", metricsAddr)
 	if err != nil {
 		return fmt.Errorf("listen private metrics HTTP: %w", err)
 	}
-	defer metricsListener.Close()
+	defer func() { _ = metricsListener.Close() }()
 
 	serveErrors := make(chan serveResult, 2)
 	go serve("application", server, applicationListener, logger, serveErrors)
