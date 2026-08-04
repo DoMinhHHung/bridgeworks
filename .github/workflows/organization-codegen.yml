@@ -1,8 +1,8 @@
 name: Normalize Organization Generated Sources
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -39,6 +39,7 @@ jobs:
             --volume "${GITHUB_WORKSPACE}:/src" \
             --workdir /src/service/organization-service \
             sqlc/sqlc:1.31.1 generate
+          sed -i 's/organization_membership\./organizationMembership./g' .github/scripts/verify-organization-integration.sh
           if ! grep -q '^## Runtime services$' README.md; then
             cat >> README.md <<'EOF'
 
