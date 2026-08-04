@@ -15,12 +15,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  normalization-artifact:
-    name: Generate normalized observability source
+  apply-normalization:
+    name: Apply deterministic observability normalization
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 8
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout feature branch
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -28,7 +34,7 @@ jobs:
           go-version: '1.26.5'
           cache: false
 
-      - name: Normalize Go modules
+      - name: Normalize modules and append documentation
         shell: bash
         run: |
           set -euo pipefail
@@ -37,17 +43,26 @@ jobs:
             (cd "${module}" && go mod tidy)
           done
 
-      - name: Upload normalized source
-        uses: actions/upload-artifact@v6
-        with:
-          name: observability-normalized-source
-          path: |
-            README.md
-            docs/production-readiness-roadmap.md
-            service/identity-service
-            service/organization-service
-          if-no-files-found: error
-          retention-days: 1
+          append_section() {
+            local target="$1" snippet="$2" marker="$3"
+            if ! grep --quiet --fixed-strings "${marker}" "${target}"; then
+              printf '\n---\n\n' >> "${target}"
+              cat "${snippet}" >> "${target}"
+            fi
+          }
+          append_section README.md .github/observability-docs/root.md '## Production Observability Foundation'
+          append_section service/identity-service/README.md .github/observability-docs/identity.md '## Private metrics and access logs'
+          append_section service/organization-service/README.md .github/observability-docs/organization.md '## Private metrics and access logs'
+          rm -rf .github/observability-docs
+
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add README.md service/identity-service service/organization-service .github/observability-docs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore: normalize observability modules and docs'
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
 
   validation:
     name: Observability repository and Go validation
