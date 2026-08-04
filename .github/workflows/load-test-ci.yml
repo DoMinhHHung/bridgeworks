@@ -268,9 +268,11 @@ jobs:
           LOADTEST_RESULTS_DIR: ${{ github.workspace }}/restart-results
           IDENTITY_REPLICAS: 2
           ORGANIZATION_REPLICAS: 1
-          LOAD_DURATION: 20s
+          LOAD_DURATION: 30s
           LOAD_VUS: 4
           DISRUPTION_DELAY_SECONDS: 3
+          POST_RECOVERY_REQUEST_TIMEOUT_SECONDS: 8
+          RESTART_COUNTER_POLL_SECONDS: 0.2
           METRICS_SAMPLE_INTERVAL_SECONDS: 0.5
         run: bash loadtest/scripts/run.sh dependency-degradation identity_me replica-restart
 
@@ -296,15 +298,22 @@ jobs:
           assert value["client_request_count"] > 0
           assert value["service_request_count"] > 0
           assert value["service_histogram_count"] == value["service_request_count"]
+          assert value["service_http_telemetry"]["telemetry_complete"] is True
+          assert value["service_http_telemetry"]["required_histogram_buckets_present"] is True
           assert value["request_count_reconciliation_complete"] is True
           assert value["gateway_or_transport_only_failures"] >= 0
+          assert value["gateway_or_transport_only_failures"] < value["client_request_count"]
+          assert value["disruption_verification_complete"] is True
           assert disruption["mode"] == "replica-restart"
           assert disruption["target_service"] == "identity-service"
           assert re.fullmatch(r"[a-f0-9]{12}", target)
           assert disruption["non_target_remained_running"] is True
           assert disruption["target_healthy_after_restart"] is True
           assert disruption["expected_replica_count_restored"] is True
-          assert disruption["traffic_active_during_restart"] is True
+          assert disruption["non_target_request_delta_during_restart"] > 0
+          assert disruption["target_request_delta_after_recovery"] > 0
+          assert disruption["traffic_continued_during_restart"] is True
+          assert disruption["target_served_after_recovery"] is True
           assert len(non_targets) == 1
           assert target in replica_counts and replica_counts[target] > 0
           assert non_targets[0] in replica_counts and replica_counts[non_targets[0]] > 0

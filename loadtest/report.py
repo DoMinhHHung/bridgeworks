@@ -28,6 +28,7 @@ HTTP_BUCKET = "http_request_duration_seconds_bucket"
 HTTP_COUNT = "http_request_duration_seconds_count"
 PHASE_ORDER = {"before": 0, "during": 1, "after": 2}
 STRICT_REQUEST_COUNT_TOLERANCE = 0
+MAX_RESTART_REQUEST_DELTA = 1_000_000_000
 
 METRIC_RE = re.compile(
     r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+a-zA-Z0-9.eE]+)$'
@@ -333,12 +334,23 @@ def service_http_telemetry(
         for status_class, count in status_distribution.items()
         if status_class in {"4xx", "5xx"}
     )
+    finite_histogram_bucket_present = any(
+        math.isfinite(bound) for bound in bucket_totals
+    )
+    infinite_bucket_count = int(round(bucket_totals.get(math.inf, 0.0)))
+    required_histogram_buckets_present = (
+        finite_histogram_bucket_present and math.inf in bucket_totals
+    )
     telemetry_complete = (
-        histogram_count_int == request_count
-        and (request_count == 0 or bool(bucket_totals))
+        request_count > 0
+        and histogram_count_int == request_count
+        and required_histogram_buckets_present
+        and infinite_bucket_count == histogram_count_int
     )
     return {
         "telemetry_complete": telemetry_complete,
+        "required_histogram_buckets_present": required_histogram_buckets_present,
+        "histogram_infinite_bucket_count": infinite_bucket_count,
         "service": target.service,
         "route": target.route,
         "method": target.method,
@@ -479,10 +491,24 @@ def load_disruption_metadata(path: str | None) -> dict[str, Any]:
         "non_target_remained_running",
         "target_healthy_after_restart",
         "expected_replica_count_restored",
-        "traffic_active_during_restart",
+        "non_target_request_delta_during_restart",
+        "target_request_delta_after_recovery",
+        "traffic_continued_during_restart",
+        "target_served_after_recovery",
     }
     if set(value) - allowed_keys:
         raise ValueError("disruption metadata contains unsupported fields")
+
+    mode = value.get("mode")
+    if not isinstance(mode, str):
+        raise ValueError("disruption metadata mode must be a string")
+    if mode != "replica-restart":
+        return value
+
+    target_service = value.get("target_service")
+    if target_service not in {"identity-service", "organization-service"}:
+        raise ValueError("replica-restart metadata contains an invalid target service")
+
     replica_key = value.get("restarted_replica_key")
     if replica_key is not None and not REPLICA_KEY_RE.fullmatch(str(replica_key)):
         raise ValueError("disruption metadata contains an invalid replica key")
@@ -491,7 +517,61 @@ def load_disruption_metadata(path: str | None) -> dict[str, Any]:
         not REPLICA_KEY_RE.fullmatch(str(item)) for item in non_targets
     ):
         raise ValueError("disruption metadata contains invalid non-target replica keys")
+    if len(non_targets) != len(set(non_targets)):
+        raise ValueError("disruption metadata contains duplicate non-target replica keys")
+
+    for key in (
+        "non_target_remained_running",
+        "target_healthy_after_restart",
+        "expected_replica_count_restored",
+        "traffic_continued_during_restart",
+        "target_served_after_recovery",
+    ):
+        field = value.get(key)
+        if field is not None and not isinstance(field, bool):
+            raise ValueError("replica-restart metadata contains an invalid boolean field")
+
+    for key in (
+        "non_target_request_delta_during_restart",
+        "target_request_delta_after_recovery",
+    ):
+        field = value.get(key)
+        if field is not None and (
+            isinstance(field, bool)
+            or not isinstance(field, int)
+            or field < 0
+            or field > MAX_RESTART_REQUEST_DELTA
+        ):
+            raise ValueError("replica-restart metadata contains an invalid request delta")
     return value
+
+
+def disruption_verification_complete(metadata: dict[str, Any]) -> bool:
+    if metadata.get("mode") != "replica-restart":
+        return True
+    return (
+        metadata.get("target_service")
+        in {"identity-service", "organization-service"}
+        and isinstance(metadata.get("restarted_replica_key"), str)
+        and REPLICA_KEY_RE.fullmatch(metadata["restarted_replica_key"]) is not None
+        and isinstance(metadata.get("non_target_replica_keys"), list)
+        and len(metadata["non_target_replica_keys"]) > 0
+        and all(
+            isinstance(key, str) and REPLICA_KEY_RE.fullmatch(key) is not None
+            for key in metadata["non_target_replica_keys"]
+        )
+        and metadata.get("non_target_remained_running") is True
+        and metadata.get("target_healthy_after_restart") is True
+        and metadata.get("expected_replica_count_restored") is True
+        and isinstance(metadata.get("non_target_request_delta_during_restart"), int)
+        and not isinstance(metadata.get("non_target_request_delta_during_restart"), bool)
+        and 0 < metadata["non_target_request_delta_during_restart"] <= MAX_RESTART_REQUEST_DELTA
+        and isinstance(metadata.get("target_request_delta_after_recovery"), int)
+        and not isinstance(metadata.get("target_request_delta_after_recovery"), bool)
+        and 0 < metadata["target_request_delta_after_recovery"] <= MAX_RESTART_REQUEST_DELTA
+        and metadata.get("traffic_continued_during_restart") is True
+        and metadata.get("target_served_after_recovery") is True
+    )
 
 
 def request_reconciliation(
@@ -501,15 +581,17 @@ def request_reconciliation(
     service_histogram_count: int,
 ) -> dict[str, Any]:
     gateway_only = max(client_request_count - service_request_count, 0)
+    service_non_zero = service_request_count > 0
     histogram_matches = service_histogram_count == service_request_count
     service_not_above_client = service_request_count <= client_request_count
     if profile == "dependency-degradation":
-        complete = histogram_matches and service_not_above_client
+        complete = service_non_zero and histogram_matches and service_not_above_client
         tolerance = None
-        policy = "gateway-only gaps allowed during explicit disruption"
+        policy = "partial gateway-only gaps allowed; non-zero application traffic required"
     else:
         complete = (
-            histogram_matches
+            service_non_zero
+            and histogram_matches
             and abs(client_request_count - service_request_count)
             <= STRICT_REQUEST_COUNT_TOLERANCE
         )
@@ -546,6 +628,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         service_histogram_count,
     )
     disruption = load_disruption_metadata(getattr(args, "disruption_metadata", None))
+    disruption_complete = disruption_verification_complete(disruption)
 
     report = {
         "schema_version": 3,
@@ -595,11 +678,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "service_http_telemetry": service_http,
         "pool_metrics": pool_metrics(Path(args.metrics_dir)),
         "disruption": disruption,
+        "disruption_verification_complete": disruption_complete,
         "thresholds": thresholds,
         "passed": (
             threshold_passed(thresholds)
             and service_http.get("telemetry_complete") is True
             and reconciliation["request_count_reconciliation_complete"] is True
+            and disruption_complete
         ),
         "test_environment_limitations": limitations,
     }
@@ -731,6 +816,7 @@ Policy: {report['request_count_reconciliation_policy']}.
 - Route: `{service.get('route', 'unknown')}`
 - Method: `{service.get('method', 'unknown')}`
 - Complete: `{str(service.get('telemetry_complete', False)).lower()}`
+- Required histogram buckets present: `{str(service.get('required_histogram_buckets_present', False)).lower()}`
 - Replica series: `{service.get('replica_series_count', 0)}`
 - Per-replica request increases: `{json.dumps(service.get('replica_request_increase', {}), sort_keys=True)}`
 - Status classes: `{service_status}`
@@ -762,7 +848,10 @@ Gauge values are summed across the replicas present in each scrape and the `duri
 
 ## Disruption metadata
 
+- Verification complete: `{str(report.get('disruption_verification_complete', False)).lower()}`
 {disruption_rows}
+
+A running load-generator process is not continuity evidence. Replica-restart passes only when the surviving replica's application request counter increases during the restart window and the restarted replica's counter increases after recovery.
 
 ## Thresholds
 

@@ -32,10 +32,11 @@ Gauges are different: acquired, idle, total, maximum connections, and HTTP in-fl
 1. requires at least two replicas for the target service;
 2. sorts concrete running container IDs;
 3. restarts exactly the first container ID with `docker restart <container-id>`;
-4. continuously checks every non-target replica remains running;
-5. waits for the target to become healthy;
-6. verifies the expected replica count and original identities are restored;
-7. records only bounded replica keys and boolean verification results.
+4. polls the scenario's exact private `http_requests_total` series on every non-target replica;
+5. requires a positive non-target request delta while the target is restarting;
+6. waits for the target to become healthy and then requires its request counter to increase during a bounded post-recovery interval;
+7. verifies the expected replica count and original identities are restored;
+8. records only bounded replica keys, numeric request deltas, and boolean verification results.
 
 Identity scenarios target one Identity replica. Organization scenarios target one Organization replica. A one-replica configuration fails during pure configuration validation, before credentials, image builds, Compose startup, or k6.
 
@@ -43,6 +44,6 @@ Identity scenarios target one Identity replica. Organization scenarios target on
 
 RSA keys, Clerk session tokens, Svix signing secrets, provider fixtures, webhook bodies, emails, and Compose environment files stay under a restricted temporary directory. Raw Prometheus snapshots and k6 summaries are deleted after sanitized `result.json` and `result.md` are generated.
 
-Normal profiles require exact client/service request-count reconciliation with zero-request tolerance. Explicit degradation profiles may record gateway or transport-only failures, but the service histogram count must still equal the number of requests completed inside the service.
+Normal profiles require exact client/service request-count reconciliation with zero-request tolerance. Explicit degradation profiles may record partial gateway or transport-only failures, but they still require non-zero application service telemetry and `service_histogram_count == service_request_count`. A running k6 process is not traffic-continuity evidence: restart success requires measured request progress on the surviving replica during restart and on the recovered target afterward.
 
 See [`docs/load-test-capacity-runbook.md`](../docs/load-test-capacity-runbook.md) for profile selection, interpretation, stop conditions, commit comparison, and capacity budgeting.

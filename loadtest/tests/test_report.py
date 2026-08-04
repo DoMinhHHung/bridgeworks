@@ -241,6 +241,15 @@ class ReportBuildTests(unittest.TestCase):
         self.assertTrue(value["request_count_reconciliation_complete"])
         self.assertEqual(value["gateway_or_transport_only_failures"], 3)
 
+    def test_disruption_profile_rejects_zero_service_telemetry(self) -> None:
+        value = report.request_reconciliation("dependency-degradation", 10, 0, 0)
+        self.assertFalse(value["request_count_reconciliation_complete"])
+        self.assertEqual(value["gateway_or_transport_only_failures"], 10)
+
+    def test_disruption_profile_rejects_service_count_above_client(self) -> None:
+        value = report.request_reconciliation("dependency-degradation", 10, 11, 11)
+        self.assertFalse(value["request_count_reconciliation_complete"])
+
     def test_builds_schema_three_report(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -282,6 +291,125 @@ class ReportBuildTests(unittest.TestCase):
         self.assertEqual(result["service_request_count"], 20)
         self.assertEqual(result["service_histogram_count"], 20)
         self.assertTrue(result["request_count_reconciliation_complete"])
+
+    def test_zero_service_telemetry_cannot_pass_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metrics = root / "metrics"
+            metrics.mkdir()
+            summary = root / "summary.json"
+            summary.write_text(
+                json.dumps({
+                    "duration_ms": 1000,
+                    "request_count": 10,
+                    "failed_rate": 1,
+                    "checks_rate": 0,
+                    "dropped_iterations": 0,
+                    "latency_ms": {"p50": 1, "p95": 2, "p99": 3, "max": 4},
+                    "status_distribution": {"503": 10},
+                    "thresholds": {"checks:rate>0.40": True},
+                }),
+                encoding="utf-8",
+            )
+            disruption = root / "disruption.json"
+            disruption.write_text('{"mode":"identity-unavailable"}\n', encoding="utf-8")
+            args = argparse.Namespace(
+                k6_summary=str(summary), metrics_dir=str(metrics),
+                output_json=str(root / "result.json"), output_markdown=str(root / "result.md"),
+                git_sha="abc123", profile="dependency-degradation", scenario="identity_me",
+                identity_replicas=2, organization_replicas=1,
+                identity_max_conns=5, identity_min_conns=0,
+                organization_max_conns=5, organization_min_conns=0,
+                experimental_pool_override=False, disruption_metadata=str(disruption),
+                environment="test", limitation=[],
+            )
+            result = report.build_report(args)
+        self.assertEqual(result["client_request_count"], 10)
+        self.assertEqual(result["service_request_count"], 0)
+        self.assertEqual(result["service_histogram_count"], 0)
+        self.assertFalse(result["service_http_telemetry"]["telemetry_complete"])
+        self.assertFalse(result["request_count_reconciliation_complete"])
+        self.assertFalse(result["passed"])
+
+    def test_replica_restart_pass_requires_measured_request_deltas(self) -> None:
+        valid = {
+            "mode": "replica-restart",
+            "target_service": "identity-service",
+            "restarted_replica_key": "aaaaaaaaaaaa",
+            "non_target_replica_keys": ["bbbbbbbbbbbb"],
+            "non_target_remained_running": True,
+            "target_healthy_after_restart": True,
+            "expected_replica_count_restored": True,
+            "non_target_request_delta_during_restart": 3,
+            "target_request_delta_after_recovery": 2,
+            "traffic_continued_during_restart": True,
+            "target_served_after_recovery": True,
+        }
+        self.assertTrue(report.disruption_verification_complete(valid))
+        invalid = dict(valid)
+        invalid["non_target_request_delta_during_restart"] = 0
+        self.assertFalse(report.disruption_verification_complete(invalid))
+        invalid = dict(valid)
+        invalid["target_served_after_recovery"] = False
+        self.assertFalse(report.disruption_verification_complete(invalid))
+        invalid = dict(valid)
+        del invalid["target_request_delta_after_recovery"]
+        self.assertFalse(report.disruption_verification_complete(invalid))
+
+    def test_replica_restart_report_fails_when_measured_delta_is_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metrics = root / "metrics"
+            metrics.mkdir()
+            writer = SnapshotWriter(metrics)
+            writer.write("before", 0, "identity", "aaaaaaaaaaaa", requests=0)
+            writer.write("after", 0, "identity", "aaaaaaaaaaaa", requests=7)
+            summary = root / "summary.json"
+            summary.write_text(
+                json.dumps({
+                    "duration_ms": 1000,
+                    "request_count": 10,
+                    "failed_rate": 0.3,
+                    "checks_rate": 0.7,
+                    "dropped_iterations": 0,
+                    "latency_ms": {"p50": 1, "p95": 2, "p99": 3, "max": 4},
+                    "status_distribution": {"200": 7, "503": 3},
+                    "thresholds": {"checks:rate>0.40": True},
+                }),
+                encoding="utf-8",
+            )
+            disruption = root / "disruption.json"
+            disruption.write_text(
+                json.dumps({
+                    "mode": "replica-restart",
+                    "target_service": "identity-service",
+                    "restarted_replica_key": "aaaaaaaaaaaa",
+                    "non_target_replica_keys": ["bbbbbbbbbbbb"],
+                    "non_target_remained_running": True,
+                    "target_healthy_after_restart": True,
+                    "expected_replica_count_restored": True,
+                    "non_target_request_delta_during_restart": 0,
+                    "target_request_delta_after_recovery": 2,
+                    "traffic_continued_during_restart": False,
+                    "target_served_after_recovery": True,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                k6_summary=str(summary), metrics_dir=str(metrics),
+                output_json=str(root / "result.json"), output_markdown=str(root / "result.md"),
+                git_sha="abc123", profile="dependency-degradation", scenario="identity_me",
+                identity_replicas=2, organization_replicas=1,
+                identity_max_conns=5, identity_min_conns=0,
+                organization_max_conns=5, organization_min_conns=0,
+                experimental_pool_override=False, disruption_metadata=str(disruption),
+                environment="test", limitation=[],
+            )
+            result = report.build_report(args)
+        self.assertTrue(result["service_http_telemetry"]["telemetry_complete"])
+        self.assertTrue(result["request_count_reconciliation_complete"])
+        self.assertFalse(result["disruption_verification_complete"])
+        self.assertFalse(result["passed"])
 
     def test_rejects_sensitive_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "forbidden"):

@@ -109,6 +109,63 @@ loadtest_initialize "{profile}" "{scenario}" "{mode}"
         self.assertEqual(identity.returncode, 0, identity.stderr)
         self.assertEqual(organization.returncode, 0, organization.stderr)
 
+    def test_http_target_matches_identity_me_regression(self) -> None:
+        script = f"""
+source "{HARNESS}"
+loadtest_http_target_for_scenario identity_me
+"""
+        result = subprocess.run(
+            ["bash", "-c", script], text=True, capture_output=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "identity-service\t/me\tGET\n")
+
+    def test_no_request_progress_cannot_produce_success_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = root / "disruption.json"
+            stop = root / "stop"
+            ready = root / "ready"
+            failure = root / "failure"
+            delta = root / "delta"
+            stop.touch()
+            script = f"""
+source "{HARNESS}"
+LOADTEST_K6_CONTAINER=fake-k6
+LOADTEST_DISRUPTION_METADATA="{metadata}"
+docker() {{
+  if [[ "$1" == "inspect" ]]; then
+    printf 'true\n'
+    return 0
+  fi
+  return 1
+}}
+loadtest_scrape_http_request_counter() {{ printf '100\n'; }}
+if loadtest_monitor_non_target_request_progress \
+  "{stop}" "{ready}" "{failure}" "{delta}" \
+  identity-service /me GET bbbbbbbbbbbb; then
+  exit 91
+fi
+loadtest_write_restart_metadata \
+  identity-service aaaaaaaaaaaa bbbbbbbbbbbb "$(cat "{delta}")" 1
+"""
+            result = subprocess.run(
+                ["bash", "-c", script],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("measured non-target request progress", result.stderr)
+            self.assertFalse(metadata.exists())
+            self.assertEqual(delta.read_text(encoding="utf-8").strip(), "0")
+
+    def test_harness_does_not_equate_k6_process_with_continuity(self) -> None:
+        harness = HARNESS.read_text(encoding="utf-8")
+        self.assertNotIn("traffic_active_during_restart", harness)
+        self.assertIn("non_target_request_delta_during_restart", harness)
+        self.assertIn("target_request_delta_after_recovery", harness)
+
 
 if __name__ == "__main__":
     unittest.main()

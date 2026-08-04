@@ -34,6 +34,29 @@ loadtest_target_service_for_scenario() {
   esac
 }
 
+loadtest_http_target_for_scenario() {
+  case "$1" in
+    identity_me)
+      printf 'identity-service\t/me\tGET\n'
+      ;;
+    organization_current|organization_dependency)
+      printf 'organization-service\t/organizations/current\tGET\n'
+      ;;
+    organization_membership)
+      printf 'organization-service\t/organizations/current/membership\tGET\n'
+      ;;
+    identity_user_unique|identity_user_retry)
+      printf 'identity-service\t/webhooks/clerk\tPOST\n'
+      ;;
+    organization_unique|organization_retry|membership_unique|membership_retry)
+      printf 'organization-service\t/webhooks/clerk\tPOST\n'
+      ;;
+    *)
+      loadtest_die "unsupported scenario for HTTP telemetry"
+      ;;
+  esac
+}
+
 loadtest_validate_replica_count() {
   local name="$1" value="$2"
   [[ "${value}" =~ ^[0-9]+$ ]] || loadtest_die "${name} must be an integer from 1 through 5"
@@ -170,6 +193,154 @@ loadtest_expected_replicas_for_service() {
 
 loadtest_container_status() {
   docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true
+}
+
+loadtest_scrape_http_request_counter() {
+  local id="$1" service="$2" route="$3" method="$4"
+  docker exec "${id}" wget --quiet --output-document=- http://127.0.0.1:9090/metrics \
+    | python3 -c '
+import re
+import sys
+
+service, route, method = sys.argv[1:]
+metric = re.compile(r"^http_requests_total(?:\{([^}]*)\})?\s+([-+a-zA-Z0-9.eE]+)$")
+label = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)=\"([^\"]*)\"")
+total = 0.0
+for raw_line in sys.stdin:
+    match = metric.match(raw_line.strip())
+    if match is None:
+        continue
+    labels = dict(label.findall(match.group(1) or ""))
+    if (
+        labels.get("service") == service
+        and labels.get("route") == route
+        and labels.get("method") == method
+    ):
+        total += float(match.group(2))
+print(int(round(total)))
+' "${service}" "${route}" "${method}"
+}
+
+loadtest_capture_request_counter() {
+  local id="$1" service="$2" route="$3" method="$4"
+  local deadline=$((SECONDS + ${RESTART_COUNTER_SCRAPE_TIMEOUT_SECONDS:-10})) value
+  while (( SECONDS < deadline )); do
+    [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" == "true" ]] \
+      || loadtest_die "service replica stopped while capturing request telemetry"
+    if value="$(loadtest_scrape_http_request_counter "${id}" "${service}" "${route}" "${method}" 2>/dev/null)"; then
+      [[ "${value}" =~ ^[0-9]+$ ]] || loadtest_die "request telemetry returned an invalid counter"
+      printf '%s\n' "${value}"
+      return 0
+    fi
+    sleep "${RESTART_COUNTER_POLL_SECONDS:-0.2}"
+  done
+  loadtest_die "request telemetry was unavailable before the bounded deadline"
+}
+
+loadtest_monitor_non_target_request_progress() {
+  local stop_file="$1" ready_file="$2" failure_file="$3" delta_file="$4"
+  local service="$5" route="$6" method="$7"
+  shift 7
+  local ids=("$@") id value total_delta deadline baseline_value maximum_value
+  declare -A baseline=() maximum=()
+
+  deadline=$((SECONDS + ${RESTART_COUNTER_SCRAPE_TIMEOUT_SECONDS:-10}))
+  for id in "${ids[@]}"; do
+    while (( SECONDS < deadline )); do
+      if [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" != "true" ]]; then
+        printf 'non-target replica stopped\n' > "${failure_file}"
+        return 1
+      fi
+      if value="$(loadtest_scrape_http_request_counter "${id}" "${service}" "${route}" "${method}" 2>/dev/null)" \
+        && [[ "${value}" =~ ^[0-9]+$ ]]; then
+        baseline["${id}"]="${value}"
+        maximum["${id}"]="${value}"
+        break
+      fi
+      sleep "${RESTART_COUNTER_POLL_SECONDS:-0.2}"
+    done
+    if [[ -z "${baseline[$id]+present}" ]]; then
+      printf 'non-target request telemetry unavailable\n' > "${failure_file}"
+      return 1
+    fi
+  done
+
+  printf '0\n' > "${delta_file}"
+  touch "${ready_file}"
+  deadline=$((SECONDS + ${RESTART_MONITOR_TIMEOUT_SECONDS:-120}))
+  while [[ ! -f "${stop_file}" ]]; do
+    if (( SECONDS >= deadline )); then
+      printf 'restart monitor exceeded bounded timeout\n' > "${failure_file}"
+      return 1
+    fi
+    total_delta=0
+    for id in "${ids[@]}"; do
+      if [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" != "true" ]]; then
+        printf 'non-target replica stopped\n' > "${failure_file}"
+        return 1
+      fi
+      baseline_value="${baseline[$id]}"
+      maximum_value="${maximum[$id]}"
+      if value="$(loadtest_scrape_http_request_counter "${id}" "${service}" "${route}" "${method}" 2>/dev/null)" \
+        && [[ "${value}" =~ ^[0-9]+$ ]]; then
+        if (( value < baseline_value )); then
+          printf 'non-target request counter reset unexpectedly\n' > "${failure_file}"
+          return 1
+        fi
+        if (( value > maximum_value )); then
+          maximum["${id}"]="${value}"
+          maximum_value="${value}"
+        fi
+      fi
+      total_delta=$((total_delta + maximum_value - baseline_value))
+    done
+    printf '%s\n' "${total_delta}" > "${delta_file}.tmp"
+    mv "${delta_file}.tmp" "${delta_file}"
+    sleep "${RESTART_COUNTER_POLL_SECONDS:-0.2}"
+  done
+
+  total_delta=0
+  for id in "${ids[@]}"; do
+    baseline_value="${baseline[$id]}"
+    maximum_value="${maximum[$id]}"
+    if value="$(loadtest_scrape_http_request_counter "${id}" "${service}" "${route}" "${method}" 2>/dev/null)" \
+      && [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= baseline_value )); then
+      if (( value > maximum_value )); then
+        maximum["${id}"]="${value}"
+        maximum_value="${value}"
+      fi
+    fi
+    total_delta=$((total_delta + maximum_value - baseline_value))
+  done
+  printf '%s\n' "${total_delta}" > "${delta_file}.tmp"
+  mv "${delta_file}.tmp" "${delta_file}"
+  (( total_delta > 0 )) || {
+    printf 'non-target replica served no requests during restart\n' > "${failure_file}"
+    return 1
+  }
+}
+
+loadtest_wait_for_target_request_progress() {
+  local id="$1" service="$2" route="$3" method="$4"
+  local baseline current deadline
+  baseline="$(loadtest_capture_request_counter "${id}" "${service}" "${route}" "${method}")"
+  deadline=$((SECONDS + ${POST_RECOVERY_REQUEST_TIMEOUT_SECONDS:-8}))
+  while (( SECONDS < deadline )); do
+    [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" == "true" ]] \
+      || loadtest_die "restarted target replica stopped after recovery"
+    [[ "$(docker inspect --format '{{.State.Running}}' "${LOADTEST_K6_CONTAINER}" 2>/dev/null || true)" == "true" ]] \
+      || loadtest_die "traffic generator stopped before target post-recovery progress"
+    if current="$(loadtest_scrape_http_request_counter "${id}" "${service}" "${route}" "${method}" 2>/dev/null)" \
+      && [[ "${current}" =~ ^[0-9]+$ ]]; then
+      (( current >= baseline )) || loadtest_die "target request counter reset after recovery baseline"
+      if (( current > baseline )); then
+        printf '%s\n' "$((current - baseline))"
+        return 0
+      fi
+    fi
+    sleep "${RESTART_COUNTER_POLL_SECONDS:-0.2}"
+  done
+  loadtest_die "restarted target replica served no requests after recovery"
 }
 
 loadtest_wait_container_healthy() {
@@ -476,15 +647,35 @@ PY
   } > "${env_file}"
 }
 
+loadtest_validate_restart_evidence() {
+  local non_target_delta="$1" target_delta="$2"
+  [[ "${non_target_delta}" =~ ^[0-9]+$ ]] \
+    && (( non_target_delta > 0 && non_target_delta <= 1000000000 )) \
+    || loadtest_die "replica-restart requires measured non-target request progress"
+  [[ "${target_delta}" =~ ^[0-9]+$ ]] \
+    && (( target_delta > 0 && target_delta <= 1000000000 )) \
+    || loadtest_die "replica-restart requires measured target post-recovery request progress"
+}
+
 loadtest_write_restart_metadata() {
   local target_service="$1" target_key="$2" non_targets_csv="$3"
-  python3 - "${LOADTEST_DISRUPTION_METADATA}" "${target_service}" "${target_key}" "${non_targets_csv}" <<'PY'
+  local non_target_delta="$4" target_delta="$5"
+  loadtest_validate_restart_evidence "${non_target_delta}" "${target_delta}"
+  python3 - \
+    "${LOADTEST_DISRUPTION_METADATA}" \
+    "${target_service}" \
+    "${target_key}" \
+    "${non_targets_csv}" \
+    "${non_target_delta}" \
+    "${target_delta}" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 path = Path(sys.argv[1])
 non_targets = [value for value in sys.argv[4].split(",") if value]
+non_target_delta = int(sys.argv[5])
+target_delta = int(sys.argv[6])
 payload = {
     "mode": "replica-restart",
     "target_service": sys.argv[2],
@@ -493,17 +684,25 @@ payload = {
     "non_target_remained_running": True,
     "target_healthy_after_restart": True,
     "expected_replica_count_restored": True,
-    "traffic_active_during_restart": True,
+    "non_target_request_delta_during_restart": non_target_delta,
+    "target_request_delta_after_recovery": target_delta,
+    "traffic_continued_during_restart": non_target_delta > 0,
+    "target_served_after_recovery": target_delta > 0,
 }
 path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
 
 loadtest_restart_one_replica() {
-  local scenario="$1" service expected ids=() target target_key non_targets=()
-  local non_target_keys=() monitor_stop monitor_failure monitor_pid current_ids=() id key
+  local scenario="$1" service route method measured_service expected ids=()
+  local target target_key non_targets=() non_target_keys=() current_ids=() id
+  local monitor_stop monitor_ready monitor_failure monitor_delta monitor_pid
+  local non_target_delta target_delta
 
   service="$(loadtest_target_service_for_scenario "${scenario}")"
+  IFS=$'\t' read -r measured_service route method < <(loadtest_http_target_for_scenario "${scenario}")
+  [[ "${measured_service}" == "${service}" ]] \
+    || loadtest_die "scenario HTTP telemetry target does not match restart service"
   expected="$(loadtest_expected_replicas_for_service "${service}")"
   (( expected >= 2 )) || loadtest_die "replica-restart requires at least two target service replicas"
 
@@ -517,20 +716,28 @@ loadtest_restart_one_replica() {
   done
 
   monitor_stop="${LOADTEST_TEMP_ROOT}/restart-monitor.stop"
+  monitor_ready="${LOADTEST_TEMP_ROOT}/restart-monitor.ready"
   monitor_failure="${LOADTEST_TEMP_ROOT}/restart-monitor.failure"
-  rm -f "${monitor_stop}" "${monitor_failure}"
-  (
-    while [[ ! -f "${monitor_stop}" ]]; do
-      for id in "${non_targets[@]}"; do
-        if [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" != "true" ]]; then
-          printf 'non-target replica stopped\n' > "${monitor_failure}"
-          exit 1
-        fi
-      done
-      sleep 0.1
-    done
-  ) &
+  monitor_delta="${LOADTEST_TEMP_ROOT}/restart-monitor.delta"
+  rm -f "${monitor_stop}" "${monitor_ready}" "${monitor_failure}" "${monitor_delta}"
+  loadtest_monitor_non_target_request_progress \
+    "${monitor_stop}" "${monitor_ready}" "${monitor_failure}" "${monitor_delta}" \
+    "${service}" "${route}" "${method}" "${non_targets[@]}" &
   monitor_pid=$!
+
+  local ready_deadline=$((SECONDS + ${RESTART_COUNTER_SCRAPE_TIMEOUT_SECONDS:-10}))
+  while [[ ! -f "${monitor_ready}" ]]; do
+    if [[ -s "${monitor_failure}" ]] || ! kill -0 "${monitor_pid}" >/dev/null 2>&1; then
+      wait "${monitor_pid}" >/dev/null 2>&1 || true
+      loadtest_die "non-target request monitor failed before restart"
+    fi
+    (( SECONDS < ready_deadline )) || {
+      touch "${monitor_stop}"
+      wait "${monitor_pid}" >/dev/null 2>&1 || true
+      loadtest_die "non-target request monitor did not become ready"
+    }
+    sleep 0.1
+  done
 
   if ! docker restart "${target}" >/dev/null; then
     touch "${monitor_stop}"
@@ -542,14 +749,19 @@ loadtest_restart_one_replica() {
     wait "${monitor_pid}" >/dev/null 2>&1 || true
     loadtest_die "restarted target replica did not recover"
   fi
-  if [[ "$(docker inspect --format '{{.State.Running}}' "${LOADTEST_K6_CONTAINER}" 2>/dev/null || true)" != "true" ]]; then
-    touch "${monitor_stop}"
-    wait "${monitor_pid}" >/dev/null 2>&1 || true
-    loadtest_die "traffic generator stopped before the single-replica restart completed"
-  fi
+
   touch "${monitor_stop}"
-  wait "${monitor_pid}" >/dev/null 2>&1 || true
-  [[ ! -s "${monitor_failure}" ]] || loadtest_die "a non-target replica stopped during restart"
+  wait "${monitor_pid}" >/dev/null 2>&1 \
+    || loadtest_die "non-target request monitor failed during restart"
+  [[ ! -s "${monitor_failure}" ]] || loadtest_die "non-target replica continuity verification failed"
+  non_target_delta="$(cat "${monitor_delta}")"
+  [[ "${non_target_delta}" =~ ^[0-9]+$ ]] && (( non_target_delta > 0 )) \
+    || loadtest_die "non-target replica served no requests during restart"
+
+  target_delta="$(loadtest_wait_for_target_request_progress \
+    "${target}" "${service}" "${route}" "${method}")"
+  [[ "${target_delta}" =~ ^[0-9]+$ ]] && (( target_delta > 0 )) \
+    || loadtest_die "restarted target replica served no requests after recovery"
 
   mapfile -t current_ids < <(loadtest_service_container_ids "${service}")
   (( ${#current_ids[@]} == expected )) || loadtest_die "expected target service replica count was not restored"
@@ -564,7 +776,9 @@ loadtest_restart_one_replica() {
 
   local non_targets_csv
   non_targets_csv="$(IFS=,; printf '%s' "${non_target_keys[*]}")"
-  loadtest_write_restart_metadata "${service}" "${target_key}" "${non_targets_csv}"
+  loadtest_write_restart_metadata \
+    "${service}" "${target_key}" "${non_targets_csv}" \
+    "${non_target_delta}" "${target_delta}"
 }
 
 loadtest_start_disruption() {

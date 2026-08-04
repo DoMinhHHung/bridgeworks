@@ -117,16 +117,25 @@ For `replica-restart`, the harness:
 2. sorts the IDs lexicographically;
 3. selects the first ID as the deterministic target;
 4. derives a bounded 12-hex-character replica key;
-5. monitors all non-target containers throughout the restart;
-6. calls `docker restart` only with the target container ID;
-7. waits for that same container to become healthy;
-8. verifies k6 traffic is still active;
-9. verifies non-target identities remained running;
-10. verifies the expected replica count is restored.
+5. captures the scenario's exact `http_requests_total` counter on each non-target replica;
+6. starts a bounded monitor that tolerates individual failed scrapes but fails if a non-target replica stops;
+7. calls `docker restart` only with the target container ID;
+8. keeps polling until that same target becomes healthy and requires a positive non-target request delta over the restart window;
+9. captures the recovered target's request counter, allows a short bounded traffic interval, and requires a positive post-recovery delta;
+10. verifies non-target identities remained running and the expected replica count is restored.
 
-The retained report records the bounded target and non-target replica keys and boolean verification results. It never includes Docker inspect output, environment variables, secrets, database URLs, or provider identifiers.
+The retained report records bounded target/non-target replica keys, `non_target_request_delta_during_restart`, `target_request_delta_after_recovery`, and their corresponding booleans. It never includes Docker inspect output, environment variables, secrets, database URLs, raw metrics responses, or provider identifiers.
 
-The PR CI regression runs two Identity replicas, short authenticated `/me` traffic, and one single-container restart. This proves harness correctness only; it is not a production high-availability or resilience claim.
+These are four distinct facts:
+
+- the k6 container is running;
+- requests reach the target application service;
+- the surviving replica serves requests while the target is restarting;
+- the restarted replica serves requests after becoming healthy.
+
+Only the last two measured counter increases establish restart continuity and recovery. k6 process state alone is never used as evidence.
+
+The PR CI regression runs two Identity replicas, short authenticated `/me` traffic, and one single-container restart. It proves the harness measures those facts correctly; it is not a production high-availability or resilience claim.
 
 ## Stable replica identity in snapshots
 
@@ -217,7 +226,16 @@ gateway_or_transport_only_failures
   = max(client_request_count - service_request_count, 0)
 ```
 
-The reporter does not manufacture service metrics for such requests. Even during degradation, `service_histogram_count` must equal the requests completed inside the service, and service count may not exceed client count.
+The reporter does not manufacture service metrics for such requests. Even during degradation, the required invariant is:
+
+```text
+0 < service_request_count <= client_request_count
+service_histogram_count == service_request_count
+```
+
+Required finite histogram buckets and the `+Inf` bucket must be present, and the `+Inf` increase must equal the histogram count. A complete APISIX/transport outage with `client_request_count > 0` but zero application requests is an incomplete report and cannot pass.
+
+For `replica-restart`, pass additionally requires positive measured request deltas on the surviving replica during restart and on the recovered target after health restoration, together with all existing running/health/replica-count checks.
 
 ## Result artifacts
 
