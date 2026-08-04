@@ -21,7 +21,7 @@ jobs:
         with:
           ref: feat/organization-sync-authorization
           fetch-depth: 0
-      - name: Normalize module and sqlc output
+      - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sed -i 's|TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhXU+yHo=|TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=|' service/organization-service/go.sum
+          rm service/organization-service/go.sum
           (
             cd service/organization-service
             go mod tidy
