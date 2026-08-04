@@ -26,7 +26,7 @@ func TestDecodeOrganizationEvent(t *testing.T) {
 }
 
 func TestDecodeMembershipEventNarrowShape(t *testing.T) {
-	payload := []byte(`{"type":"organizationMembership.created","timestamp":1785744000000,"data":{"id":"mem_123","organization":{"id":"org_123","name":"ignored"},"public_user_data":{"user_id":"user_123","identifier":"secret@example.test"},"role":" org:admin ","private_metadata":{"ignored":true}}}`)
+	payload := []byte(`{"type":"organization_membership.created","timestamp":1785744000000,"data":{"id":"mem_123","organization":{"id":"org_123","name":"ignored"},"public_user_data":{"user_id":"user_123","identifier":"secret@example.test"},"role":" org:admin ","private_metadata":{"ignored":true}}}`)
 	event, supported, err := Decode("msg_2", payload)
 	if err != nil || !supported {
 		t.Fatalf("Decode() err = %v", err)
@@ -41,14 +41,25 @@ func TestDecodeMembershipEventNarrowShape(t *testing.T) {
 
 func TestDecodeRejectsMissingMembershipStructure(t *testing.T) {
 	cases := []string{
-		`{"type":"organizationMembership.created","timestamp":1,"data":{"id":"mem","public_user_data":{"user_id":"user"}}}`,
-		`{"type":"organizationMembership.created","timestamp":1,"data":{"id":"mem","organization":{"id":"org"}}}`,
-		`{"type":"organizationMembership.created","timestamp":1,"data":{"organization":{"id":"org"},"public_user_data":{"user_id":"user"}}}`,
+		`{"type":"organization_membership.created","timestamp":1,"data":{"id":"mem","public_user_data":{"user_id":"user"}}}`,
+		`{"type":"organization_membership.created","timestamp":1,"data":{"id":"mem","organization":{"id":"org"}}}`,
+		`{"type":"organization_membership.created","timestamp":1,"data":{"organization":{"id":"org"},"public_user_data":{"user_id":"user"}}}`,
 	}
 	for _, payload := range cases {
 		if _, _, err := Decode("msg", []byte(payload)); err == nil {
 			t.Fatalf("expected error for %s", payload)
 		}
+	}
+}
+
+func TestDecodeBlankOptionalOrganizationFields(t *testing.T) {
+	payload := []byte(`{"type":"organization.updated","timestamp":1785744000000,"data":{"id":"org_123","name":"   ","slug":""}}`)
+	event, supported, err := Decode("msg", payload)
+	if err != nil || !supported {
+		t.Fatalf("Decode() supported=%v err=%v", supported, err)
+	}
+	if event.Organization.Name != nil || event.Organization.Slug != nil {
+		t.Fatalf("blank optional fields must map to nil: %#v", event.Organization)
 	}
 }
 
