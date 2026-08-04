@@ -112,8 +112,8 @@ func (r *Repository) ProcessEvent(ctx context.Context, event organizationsync.Ev
 		return safeerr.Wrap("load latest organization aggregate event", latestErr)
 	}
 	if latestErr == nil && organizationsync.IsStale(event, organizationsync.Event{
-		EventID: latest.EventID,
-		Type:    latest.EventType,
+		EventID:    latest.EventID,
+		Type:       latest.EventType,
 		OccurredAt: latest.OccurredAt.Time.UTC(),
 	}) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -255,9 +255,9 @@ func applyMembershipEvent(ctx context.Context, queries *sqlcgen.Queries, event o
 	_, insertErr := queries.InsertMembership(ctx, sqlcgen.InsertMembershipParams{
 		ID: id, ClerkMembershipID: event.Membership.ClerkMembershipID,
 		OrganizationID: organization.ID, ClerkUserID: event.Membership.ClerkUserID,
-		ClerkRole: event.Membership.ClerkRole,
+		ClerkRole:       event.Membership.ClerkRole,
 		ApplicationRole: organizationsync.InitialApplicationRole(event.Membership.ClerkRole),
-		Status: "active",
+		Status:          "active",
 	})
 	if insertErr == nil {
 		return nil

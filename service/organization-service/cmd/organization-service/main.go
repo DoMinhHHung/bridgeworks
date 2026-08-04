@@ -46,8 +46,8 @@ func run() error {
 	database, err := postgres.Open(signalContext, postgres.Config{
 		URL: cfg.DatabaseURL, ConnectTimeout: cfg.DatabaseConnectTimeout,
 		MaxConns: cfg.DatabaseMaxConns, MinConns: cfg.DatabaseMinConns,
-		MaxConnLifetime: cfg.DatabaseMaxConnLifetime,
-		MaxConnIdleTime: cfg.DatabaseMaxConnIdleTime,
+		MaxConnLifetime:   cfg.DatabaseMaxConnLifetime,
+		MaxConnIdleTime:   cfg.DatabaseMaxConnIdleTime,
 		HealthCheckPeriod: cfg.DatabaseHealthCheckPeriod,
 	})
 	if err != nil {
@@ -91,9 +91,9 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.HTTPAddr, Handler: router,
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout,
+		ReadTimeout:       cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout,
 		IdleTimeout: cfg.IdleTimeout,
-		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		ErrorLog:    slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
 	serveErrors := make(chan error, 1)

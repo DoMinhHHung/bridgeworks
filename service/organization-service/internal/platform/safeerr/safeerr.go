@@ -14,6 +14,6 @@ func Wrap(operation string, cause error) error {
 	return &Error{operation: operation, cause: cause}
 }
 
-func (e *Error) Error() string { return e.operation }
-func (e *Error) Unwrap() error { return e.cause }
+func (e *Error) Error() string   { return e.operation }
+func (e *Error) Unwrap() error   { return e.cause }
 func New(operation string) error { return fmt.Errorf("%s", operation) }

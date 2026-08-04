@@ -55,10 +55,10 @@ func CurrentMembership(resolver CurrentOrganizationResolver) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, membershipResponse{
-			ID: result.Membership.ID.String(),
+			ID:             result.Membership.ID.String(),
 			OrganizationID: result.Membership.OrganizationID.String(),
-			Role: result.Actor.Role,
-			Permissions: result.Actor.Permissions(),
+			Role:           result.Actor.Role,
+			Permissions:    result.Actor.Permissions(),
 		})
 	}
 }

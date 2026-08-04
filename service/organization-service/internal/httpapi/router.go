@@ -9,16 +9,16 @@ import (
 )
 
 type Dependencies struct {
-	ServiceName       string
-	Logger            *slog.Logger
-	Readiness         ReadinessChecker
-	ReadinessTimeout  time.Duration
-	WebhookVerifier   WebhookVerifier
-	WebhookProcessor  EventProcessor
-	WebhookMaxBytes   int64
-	WebhookTimeout    time.Duration
-	Authenticate      func(http.Handler) http.Handler
-	CurrentResolver   CurrentOrganizationResolver
+	ServiceName      string
+	Logger           *slog.Logger
+	Readiness        ReadinessChecker
+	ReadinessTimeout time.Duration
+	WebhookVerifier  WebhookVerifier
+	WebhookProcessor EventProcessor
+	WebhookMaxBytes  int64
+	WebhookTimeout   time.Duration
+	Authenticate     func(http.Handler) http.Handler
+	CurrentResolver  CurrentOrganizationResolver
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {

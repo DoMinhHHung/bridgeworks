@@ -66,10 +66,10 @@ func TestResolveUsesLocalRoleAndPermissions(t *testing.T) {
 func TestResolveStatusFailures(t *testing.T) {
 	organizationID := uuid.MustParse("0198f3be-bf6f-7b0a-8a25-f8433567e0c2")
 	cases := []struct {
-		name      string
-		principal authorization.Principal
+		name       string
+		principal  authorization.Principal
 		repository fakeRepository
-		want      error
+		want       error
 	}{
 		{name: "missing context", principal: authorization.Principal{ClerkUserID: "user"}, want: ErrOrganizationContextRequired},
 		{name: "pending", principal: authorization.Principal{ClerkUserID: "user", ClerkOrganizationID: "org"}, repository: fakeRepository{organization: Organization{ID: organizationID, Status: "pending"}, organizationFound: true}, want: ErrOrganizationNotReady},
