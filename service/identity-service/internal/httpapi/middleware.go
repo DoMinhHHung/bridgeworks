@@ -50,7 +50,7 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 						"panic recovered",
 						"request_id", RequestIDFromContext(r.Context()),
 						"method", r.Method,
-						"path", r.URL.Path,
+						"route", routePattern(r),
 						"panic_type", fmt.Sprintf("%T", recovered),
 						"stack", string(debug.Stack()),
 					)
