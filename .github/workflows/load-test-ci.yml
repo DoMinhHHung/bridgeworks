@@ -41,6 +41,16 @@ on:
           - identity-delayed
           - constrained-pool
           - replica-restart
+      identity_replicas:
+        description: Identity replicas for the isolated load-test stack (1-5)
+        type: number
+        required: true
+        default: 1
+      organization_replicas:
+        description: Organization replicas for the isolated load-test stack (1-5)
+        type: number
+        required: true
+        default: 1
 
 permissions:
   contents: read
@@ -90,12 +100,17 @@ jobs:
             service/identity-service/migrations/000001_create_app_users.sql
           git diff --exit-code origin/main...HEAD -- \
             service/organization-service/migrations/000001_create_organization_foundation.sql
-          git diff --exit-code origin/main...HEAD -- compose.yaml .env.example
+          git diff --exit-code origin/main...HEAD -- \
+            compose.yaml .env.example gateway/apisix/conf/apisix.yaml gateway/apisix/conf/config.yaml
           test ! -f loadtest/go.mod
           grep --quiet --fixed-strings 'grafana/k6:2.0.0' loadtest/scripts/harness.sh
           grep --quiet --fixed-strings 'python:3.13.5-alpine3.22' loadtest/scripts/harness.sh
           ! grep -R --line-number --fixed-strings 'DATABASE_MAX_CONNS=' loadtest docs/load-test-capacity-runbook.md
           ! grep -R --line-number --fixed-strings 'postgres://' loadtest --exclude='test_report.py'
+          ! grep --quiet --fixed-strings 'loadtest_compose restart identity-service' loadtest/scripts/harness.sh
+          ! grep --quiet --fixed-strings 'loadtest_compose restart organization-service' loadtest/scripts/harness.sh
+          grep --quiet --fixed-strings 'docker restart "${target}"' loadtest/scripts/harness.sh
+          grep --quiet --fixed-strings 'metrics-${phase}-${sample}-${file_service}-${replica_key}.prom' loadtest/scripts/harness.sh
 
       - name: Run deterministic unit and syntax tests
         shell: bash
@@ -174,6 +189,19 @@ jobs:
           test "$(find loadtest-results/smoke -name result.md -type f | wc -l)" = "9"
           test -f loadtest-results/capacity/capacity-budget.json
           test -f loadtest-results/capacity/capacity-budget.md
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in Path("loadtest-results/smoke").glob("*/result.json"):
+              value = json.loads(path.read_text())
+              assert value["schema_version"] == 3
+              assert value["passed"] is True
+              assert value["request_count_reconciliation_complete"] is True
+              assert value["client_request_count"] == value["service_request_count"]
+              assert value["service_histogram_count"] == value["service_request_count"]
+              assert value["gateway_or_transport_only_failures"] == 0
+          PY
           ! grep -R --line-number --extended-regexp \
             'whsec_|postgres(ql)?://|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(user|org|mem)_load_' \
             loadtest-results
@@ -197,12 +225,10 @@ jobs:
         run: |
           set +e
           cleanup_failed=0
-
           containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
           if [[ -n "${containers}" ]]; then
             docker rm --force ${containers} || cleanup_failed=1
           fi
-
           while IFS= read -r project; do
             [[ -z "${project}" ]] && continue
             docker compose -p "${project}" down --remove-orphans --volumes || cleanup_failed=1
@@ -210,14 +236,122 @@ jobs:
             docker compose ls --format json | python3 -c \
               'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
           )
-
           remaining_containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
-          remaining_projects="$(
-            docker compose ls --format json | python3 -c \
-              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
-          )"
+          remaining_projects="$(docker compose ls --format json | python3 -c 'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))')"
+          remaining_networks="$(docker network ls --format '{{.Name}}' | grep '^bridgeworks-loadtest-' || true)"
+          remaining_volumes="$(docker volume ls --format '{{.Name}}' | grep '^bridgeworks-loadtest-' || true)"
           [[ -z "${remaining_containers}" ]] || cleanup_failed=1
           [[ -z "${remaining_projects}" ]] || cleanup_failed=1
+          [[ -z "${remaining_networks}" ]] || cleanup_failed=1
+          [[ -z "${remaining_volumes}" ]] || cleanup_failed=1
+          exit "${cleanup_failed}"
+
+  replica-restart-regression:
+    name: Two-replica single-container restart regression
+    if: github.event_name == 'pull_request'
+    needs: validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Run bounded two-Identity-replica restart
+        shell: bash
+        env:
+          LOADTEST_RESULTS_DIR: ${{ github.workspace }}/restart-results
+          IDENTITY_REPLICAS: 2
+          ORGANIZATION_REPLICAS: 1
+          LOAD_DURATION: 20s
+          LOAD_VUS: 4
+          DISRUPTION_DELAY_SECONDS: 3
+          METRICS_SAMPLE_INTERVAL_SECONDS: 0.5
+        run: bash loadtest/scripts/run.sh dependency-degradation identity_me replica-restart
+
+      - name: Verify single-replica restart result
+        shell: bash
+        run: |
+          set -euo pipefail
+          result=restart-results/dependency-degradation/identity_me/result.json
+          test -f "${result}"
+          python3 - "${result}" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          value = json.loads(Path(sys.argv[1]).read_text())
+          disruption = value["disruption"]
+          replica_counts = value["service_http_telemetry"]["replica_request_increase"]
+          target = disruption["restarted_replica_key"]
+          non_targets = disruption["non_target_replica_keys"]
+          assert value["schema_version"] == 3
+          assert value["passed"] is True
+          assert value["client_request_count"] > 0
+          assert value["service_request_count"] > 0
+          assert value["service_histogram_count"] == value["service_request_count"]
+          assert value["request_count_reconciliation_complete"] is True
+          assert value["gateway_or_transport_only_failures"] >= 0
+          assert disruption["mode"] == "replica-restart"
+          assert disruption["target_service"] == "identity-service"
+          assert re.fullmatch(r"[a-f0-9]{12}", target)
+          assert disruption["non_target_remained_running"] is True
+          assert disruption["target_healthy_after_restart"] is True
+          assert disruption["expected_replica_count_restored"] is True
+          assert disruption["traffic_active_during_restart"] is True
+          assert len(non_targets) == 1
+          assert target in replica_counts and replica_counts[target] > 0
+          assert non_targets[0] in replica_counts and replica_counts[non_targets[0]] > 0
+          assert value["pool_metrics"]["counter_deltas"]["identity-service"]["database_pool_acquire_count_total"] >= 0
+          PY
+          ! grep -R --line-number --extended-regexp \
+            'whsec_|postgres(ql)?://|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(user|org|mem)_load_' \
+            restart-results
+
+      - name: Upload restart regression result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-test-replica-restart-${{ github.run_id }}
+          path: |
+            restart-results/**/result.json
+            restart-results/**/result.md
+            restart-results/capacity/capacity-budget.json
+            restart-results/capacity/capacity-budget.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Deterministic cleanup
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          cleanup_failed=0
+          containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
+          if [[ -n "${containers}" ]]; then
+            docker rm --force ${containers} || cleanup_failed=1
+          fi
+          while IFS= read -r project; do
+            [[ -z "${project}" ]] && continue
+            docker compose -p "${project}" down --remove-orphans --volumes || cleanup_failed=1
+          done < <(
+            docker compose ls --format json | python3 -c \
+              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
+          )
+          remaining_containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
+          remaining_projects="$(docker compose ls --format json | python3 -c 'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))')"
+          remaining_networks="$(docker network ls --format '{{.Name}}' | grep '^bridgeworks-loadtest-' || true)"
+          remaining_volumes="$(docker volume ls --format '{{.Name}}' | grep '^bridgeworks-loadtest-' || true)"
+          [[ -z "${remaining_containers}" ]] || cleanup_failed=1
+          [[ -z "${remaining_projects}" ]] || cleanup_failed=1
+          [[ -z "${remaining_networks}" ]] || cleanup_failed=1
+          [[ -z "${remaining_volumes}" ]] || cleanup_failed=1
           exit "${cleanup_failed}"
 
   manual-profile:
@@ -230,6 +364,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate manual profile and replica inputs
+        shell: bash
+        env:
+          PROFILE: ${{ inputs.profile }}
+          SCENARIO: ${{ inputs.scenario }}
+          INPUT_DEGRADATION_MODE: ${{ inputs.degradation_mode }}
+          IDENTITY_REPLICAS: ${{ inputs.identity_replicas }}
+          ORGANIZATION_REPLICAS: ${{ inputs.organization_replicas }}
+        run: |
+          set -euo pipefail
+          degradation=none
+          if [[ "${PROFILE}" == "dependency-degradation" ]]; then
+            degradation="${INPUT_DEGRADATION_MODE}"
+          fi
+          source loadtest/scripts/harness.sh
+          loadtest_validate_configuration \
+            "${PROFILE}" "${SCENARIO}" "${degradation}" \
+            "${IDENTITY_REPLICAS}" "${ORGANIZATION_REPLICAS}"
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -240,6 +393,8 @@ jobs:
         shell: bash
         env:
           LOADTEST_RESULTS_DIR: ${{ github.workspace }}/loadtest-results
+          IDENTITY_REPLICAS: ${{ inputs.identity_replicas }}
+          ORGANIZATION_REPLICAS: ${{ inputs.organization_replicas }}
         run: |
           set -euo pipefail
           degradation=none
@@ -281,12 +436,10 @@ jobs:
         run: |
           set +e
           cleanup_failed=0
-
           containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
           if [[ -n "${containers}" ]]; then
             docker rm --force ${containers} || cleanup_failed=1
           fi
-
           while IFS= read -r project; do
             [[ -z "${project}" ]] && continue
             docker compose -p "${project}" down --remove-orphans --volumes || cleanup_failed=1
@@ -294,12 +447,12 @@ jobs:
             docker compose ls --format json | python3 -c \
               'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
           )
-
           remaining_containers="$(docker ps -aq --filter label=bridgeworks.loadtest=true)"
-          remaining_projects="$(
-            docker compose ls --format json | python3 -c \
-              'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))'
-          )"
+          remaining_projects="$(docker compose ls --format json | python3 -c 'import json,sys; print("\n".join(x["Name"] for x in json.load(sys.stdin) if x["Name"].startswith("bridgeworks-loadtest-")))')"
+          remaining_networks="$(docker network ls --format '{{.Name}}' | grep '^bridgeworks-loadtest-' || true)"
+          remaining_volumes="$(docker volume ls --format '{{.Name}}' | grep '^bridgeworks-loadtest-' || true)"
           [[ -z "${remaining_containers}" ]] || cleanup_failed=1
           [[ -z "${remaining_projects}" ]] || cleanup_failed=1
+          [[ -z "${remaining_networks}" ]] || cleanup_failed=1
+          [[ -z "${remaining_volumes}" ]] || cleanup_failed=1
           exit "${cleanup_failed}"
