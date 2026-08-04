@@ -39,7 +39,7 @@ func TestServiceClerkMembershipConstraintEquivalentActiveProjection(t *testing.T
 	}
 	uow := &stagedMembershipUnitOfWork{
 		fakeUnitOfWork: base,
-		afterFound:    true,
+		afterFound:     true,
 		after: Membership{
 			ID:                testMembershipID,
 			ClerkMembershipID: "mem-1",
@@ -73,7 +73,7 @@ func TestServiceClerkMembershipConstraintDeletedProjectionNeverReactivates(t *te
 	}
 	uow := &stagedMembershipUnitOfWork{
 		fakeUnitOfWork: base,
-		afterFound:    true,
+		afterFound:     true,
 		after: Membership{
 			ID:                testMembershipID,
 			ClerkMembershipID: "mem-1",
@@ -106,7 +106,7 @@ func TestServiceClerkMembershipConstraintInconsistentProjectionRollsBack(t *test
 	}
 	uow := &stagedMembershipUnitOfWork{
 		fakeUnitOfWork: base,
-		afterFound:    true,
+		afterFound:     true,
 		after: Membership{
 			ID:                testMembershipID,
 			ClerkMembershipID: "mem-1",
