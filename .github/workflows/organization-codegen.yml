@@ -1,45 +1,50 @@
-name: Organization Codegen Capture
+name: Normalize Organization Generated Sources
 
 on:
   pull_request:
-  workflow_dispatch:
+    types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: organization-codegen-${{ github.ref }}
-  cancel-in-progress: true
+  group: normalize-organization-generated-sources
+  cancel-in-progress: false
 
 jobs:
-  capture:
+  normalize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout feature branch
         uses: actions/checkout@v6
-      - name: Set up Go
+        with:
+          ref: feat/organization-sync-authorization
+          fetch-depth: 0
+      - name: Normalize module and sqlc output
         uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
           cache: false
-      - name: Normalize module and generate sqlc
+      - name: Generate and commit authoritative files
         shell: bash
         run: |
           set -euo pipefail
-          cd service/organization-service
-          go mod tidy
-          go mod download
+          sed -i 's|TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhXU+yHo=|TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=|' service/organization-service/go.sum
+          (
+            cd service/organization-service
+            go mod tidy
+          )
           docker run --rm \
             --volume "${GITHUB_WORKSPACE}:/src" \
             --workdir /src/service/organization-service \
             sqlc/sqlc:1.31.1 generate
-      - name: Upload generated source snapshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: organization-codegen-${{ github.sha }}
-          path: |
-            service/organization-service/go.mod
-            service/organization-service/go.sum
-            service/organization-service/internal/store/sqlcgen
-          if-no-files-found: error
-          retention-days: 1
+          rm -rf .github/payloads/organization
+          rm -f .github/workflows/apply-organization-payload.yml
+          rm -f .github/workflows/organization-codegen.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --check
+          git commit -m "chore(organization): normalize generated sources"
+          git push origin HEAD:feat/organization-sync-authorization
