@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  normalization-patch:
-    name: Generate formatting and module patch
+  normalization-artifact:
+    name: Generate normalized observability source
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,7 +28,7 @@ jobs:
           go-version: '1.26.5'
           cache: false
 
-      - name: Generate deterministic patch
+      - name: Normalize Go modules and documentation
         shell: bash
         run: |
           set -euo pipefail
@@ -36,16 +36,115 @@ jobs:
             find "${module}" -name '*.go' -type f -print0 | xargs -0 -r gofmt -w
             (cd "${module}" && go mod tidy)
           done
-          git diff -- \
-            service/identity-service \
-            service/organization-service > observability-normalization.patch
-          test -s observability-normalization.patch
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Upload deterministic patch
+          sections = {
+              Path("README.md"): r'''## Production Observability Foundation
+
+Identity Service and Organization Service expose low-cardinality Prometheus metrics on private operational listeners only:
+
+```text
+identity-service:9090/metrics
+organization-service:9090/metrics
+```
+
+The ports are available only inside the Docker `bridgeworks` network. APISIX does not route `/metrics`, and the metrics ports are not published to the host.
+
+Every completed application request emits a structured access record with `service`, `request_id`, `method`, bounded chi `route`, `status`, `duration_ms`, and `response_bytes`. Health completion records use debug level. Raw paths, query strings, request/response bodies, authorization material, webhook signatures, email addresses, provider identifiers, local UUIDs, database URLs, and raw dependency errors are excluded.
+
+Implemented metrics:
+
+```text
+http_requests_total{service,route,method,status_class}
+http_request_duration_seconds{service,route,method}
+http_requests_in_flight{service}
+clerk_webhook_events_total{service,aggregate,outcome}
+database_pool_acquired_connections{service,pool}
+database_pool_idle_connections{service,pool}
+database_pool_total_connections{service,pool}
+database_pool_max_connections{service,pool}
+database_pool_acquire_count_total{service,pool}
+database_pool_acquire_duration_seconds_total{service,pool}
+database_pool_empty_acquire_count_total{service,pool}
+database_pool_canceled_acquire_count_total{service,pool}
+```
+
+Route labels use matched chi templates or the bounded fallback `unknown`. Webhook aggregates and outcomes use explicit bounded enums. PostgreSQL pool metrics are collected from `pgxpool.Stat()` at scrape time without queries or ticker goroutines.
+
+Metrics and scraping do not participate in application readiness. PostgreSQL pool defaults remain unchanged until load tests provide evidence for a safe per-replica connection budget. Redis cache-aside, using Upstash when implemented, rate limiting, OpenTelemetry tracing, and inbox retention remain separate roadmap work.''',
+              Path("service/identity-service/README.md"): r'''## Private metrics and access logs
+
+Identity Service starts a second operational HTTP listener configured by:
+
+```dotenv
+METRICS_ADDR=:9090
+```
+
+The address must be a non-empty `host:port`, must not include a URL scheme, and must differ from `HTTP_ADDR`. Bind failure stops startup. The listener exposes only `GET /metrics`, is gracefully shut down, is private to the Docker network, and is not routed through APISIX. Prometheus absence or scrape failure does not affect `/health/ready` or request handling.
+
+Identity metrics use a service-owned Prometheus registry and bounded labels:
+
+```text
+http_requests_total{service,route,method,status_class}
+http_request_duration_seconds{service,route,method}
+http_requests_in_flight{service}
+clerk_webhook_events_total{service,aggregate="user",outcome}
+database_pool_*{service,pool="runtime"}
+```
+
+Webhook outcomes are `processed`, `duplicate`, `stale`, `rejected`, and `retryable_failure`. Processed/duplicate/stale outcomes are returned by the application transaction flow after the corresponding commit decision.
+
+Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records use debug level.
+
+Access logs and metrics exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk user IDs, local UUIDs, database URLs, request/response bodies, request IDs as metric labels, and raw dependency errors.
+
+Pool defaults remain unchanged until measured load tests establish throughput, latency, replica count, connection wait, and the total Supabase PostgreSQL connection budget. A later Identity cache-aside PR will use Upstash Redis with PostgreSQL fallback and Redis excluded from readiness; no Redis code exists in this observability PR.''',
+              Path("service/organization-service/README.md"): r'''## Private metrics and access logs
+
+Organization Service starts a second operational HTTP listener configured by:
+
+```dotenv
+ORGANIZATION_METRICS_ADDR=:9090
+```
+
+The address must be a non-empty `host:port`, must not include a URL scheme, and must differ from `HTTP_ADDR`. Bind failure stops startup. The listener exposes only `GET /metrics`, is gracefully shut down, is private to the Docker network, and is not routed through APISIX. Prometheus absence or scrape failure does not affect `/health/ready`, webhook synchronization, or authenticated requests.
+
+Organization metrics use a service-owned Prometheus registry and bounded labels:
+
+```text
+http_requests_total{service,route,method,status_class}
+http_request_duration_seconds{service,route,method}
+http_requests_in_flight{service}
+clerk_webhook_events_total{service,aggregate,outcome}
+database_pool_*{service,pool="runtime"}
+```
+
+Webhook aggregate values are `organization` and `membership`. Outcomes are `processed`, `duplicate`, `stale`, `rejected`, and `retryable_failure`. Processed/duplicate/stale outcomes come from the application-owned Unit of Work after its commit decision; the HTTP layer does not infer persistence semantics from status codes.
+
+Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records use debug level.
+
+Access logs and metrics exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk user/organization/membership IDs, local UUIDs, database URLs, request/response bodies, request IDs as metric labels, and raw dependency errors.
+
+Pool defaults remain unchanged until measured load tests establish throughput, latency, replica count, connection wait, and the total Organization PostgreSQL connection budget. OpenTelemetry tracing, APISIX rate limiting, caching, and inbox retention remain separate work.''',
+          }
+
+          for path, section in sections.items():
+              marker = section.splitlines()[0]
+              current = path.read_text(encoding="utf-8")
+              if marker not in current:
+                  path.write_text(current.rstrip() + "\n\n---\n\n" + section.strip() + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload normalized source
         uses: actions/upload-artifact@v6
         with:
-          name: observability-normalization-patch
-          path: observability-normalization.patch
+          name: observability-normalized-source
+          path: |
+            README.md
+            docs/production-readiness-roadmap.md
+            service/identity-service
+            service/organization-service
           if-no-files-found: error
           retention-days: 1
 
