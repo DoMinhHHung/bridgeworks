@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/currentorganization"
-	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationid"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationsync"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform/safeerr"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/store/sqlcgen"
@@ -15,20 +14,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Beginner interface {
+const (
+	createMembershipInsertSavepoint   = "SAVEPOINT membership_insert"
+	rollbackMembershipInsertSavepoint = "ROLLBACK TO SAVEPOINT membership_insert"
+	releaseMembershipInsertSavepoint  = "RELEASE SAVEPOINT membership_insert"
+)
+
+type database interface {
 	Begin(context.Context) (pgx.Tx, error)
+	sqlcgen.DBTX
 }
 
 type Repository struct {
-	db      Beginner
+	db      database
 	queries *sqlcgen.Queries
 }
 
-func New(db interface {
-	Begin(context.Context) (pgx.Tx, error)
-	sqlcgen.DBTX
-}) *Repository {
+func New(db database) *Repository {
 	return &Repository{db: db, queries: sqlcgen.New(db)}
+}
+
+func (r *Repository) Begin(ctx context.Context) (organizationsync.UnitOfWork, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &unitOfWork{tx: tx, queries: r.queries.WithTx(tx)}, nil
 }
 
 func (r *Repository) GetOrganizationByClerkID(ctx context.Context, clerkOrganizationID string) (currentorganization.Organization, bool, error) {
@@ -69,21 +80,17 @@ func (r *Repository) ListPermissions(ctx context.Context, role string) ([]string
 	return permissions, nil
 }
 
-func (r *Repository) ProcessEvent(ctx context.Context, event organizationsync.Event, generator organizationid.Generator) (err error) {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return safeerr.Wrap("begin organization synchronization transaction", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-	queries := r.queries.WithTx(tx)
+type unitOfWork struct {
+	tx      pgx.Tx
+	queries *sqlcgen.Queries
+}
 
-	_, err = queries.InsertWebhookEvent(ctx, sqlcgen.InsertWebhookEventParams{
-		EventID: event.EventID, EventType: event.Type,
-		AggregateType: event.AggregateType, AggregateID: event.AggregateID,
+func (u *unitOfWork) InsertInbox(ctx context.Context, event organizationsync.Event) (bool, error) {
+	_, err := u.queries.InsertWebhookEvent(ctx, sqlcgen.InsertWebhookEventParams{
+		EventID:             event.EventID,
+		EventType:           event.Type,
+		AggregateType:       event.AggregateType,
+		AggregateID:         event.AggregateID,
 		ClerkOrganizationID: event.ClerkOrganizationID,
 		OccurredAt: pgtype.Timestamptz{
 			Time:  event.OccurredAt.UTC(),
@@ -91,190 +98,183 @@ func (r *Repository) ProcessEvent(ctx context.Context, event organizationsync.Ev
 		},
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		if commitErr := tx.Commit(ctx); commitErr != nil {
-			return safeerr.Wrap("commit duplicate organization event", commitErr)
-		}
-		return nil
+		return false, nil
 	}
-	if err != nil {
-		return safeerr.Wrap("insert organization webhook inbox event", err)
-	}
-
-	if err = queries.AcquireOrganizationAdvisoryLock(ctx, event.ClerkOrganizationID); err != nil {
-		return safeerr.Wrap("acquire organization advisory lock", err)
-	}
-	latest, latestErr := queries.GetLatestAggregateEvent(ctx, sqlcgen.GetLatestAggregateEventParams{
-		AggregateType: event.AggregateType,
-		AggregateID:   event.AggregateID,
-		EventID:       event.EventID,
-	})
-	if latestErr != nil && !errors.Is(latestErr, pgx.ErrNoRows) {
-		return safeerr.Wrap("load latest organization aggregate event", latestErr)
-	}
-	if latestErr == nil && organizationsync.IsStale(event, organizationsync.Event{
-		EventID:    latest.EventID,
-		Type:       latest.EventType,
-		OccurredAt: latest.OccurredAt.Time.UTC(),
-	}) {
-		if commitErr := tx.Commit(ctx); commitErr != nil {
-			return safeerr.Wrap("commit stale organization event", commitErr)
-		}
-		return nil
-	}
-
-	if event.AggregateType == organizationsync.AggregateOrganization {
-		err = applyOrganizationEvent(ctx, queries, event, generator)
-	} else {
-		err = applyMembershipEvent(ctx, queries, event, generator)
-	}
-	if err != nil {
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return safeerr.Wrap("commit organization synchronization transaction", err)
-	}
-	return nil
+	return err == nil, err
 }
 
-func applyOrganizationEvent(ctx context.Context, queries *sqlcgen.Queries, event organizationsync.Event, generator organizationid.Generator) error {
-	existing, err := queries.GetOrganizationByClerkID(ctx, event.ClerkOrganizationID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return safeerr.Wrap("load organization for synchronization", err)
-	}
-	if event.Type == organizationsync.EventOrganizationDeleted {
-		if errors.Is(err, pgx.ErrNoRows) {
-			id, generateErr := generator.New()
-			if generateErr != nil {
-				return safeerr.Wrap("generate organization ID", generateErr)
-			}
-			_, insertErr := queries.InsertOrganization(ctx, sqlcgen.InsertOrganizationParams{
-				ID: id, ClerkOrganizationID: event.ClerkOrganizationID, Status: "deleted",
-			})
-			if insertErr != nil {
-				return safeerr.Wrap("insert deleted organization tombstone", insertErr)
-			}
-			return nil
-		}
-		_, err = queries.MarkOrganizationDeleted(ctx, event.ClerkOrganizationID)
-		if err != nil {
-			return safeerr.Wrap("mark organization deleted", err)
-		}
-		return nil
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		id, generateErr := generator.New()
-		if generateErr != nil {
-			return safeerr.Wrap("generate organization ID", generateErr)
-		}
-		_, insertErr := queries.InsertOrganization(ctx, sqlcgen.InsertOrganizationParams{
-			ID: id, ClerkOrganizationID: event.ClerkOrganizationID,
-			Name: event.Organization.Name, Slug: event.Organization.Slug, Status: "active",
-		})
-		if insertErr != nil {
-			return safeerr.Wrap("insert organization projection", insertErr)
-		}
-		return nil
-	}
-	if existing.Status == "deleted" {
-		return nil
-	}
-	_, err = queries.UpdateOrganizationProjection(ctx, sqlcgen.UpdateOrganizationProjectionParams{
-		ClerkOrganizationID: event.ClerkOrganizationID,
-		Name:                event.Organization.Name,
-		Slug:                event.Organization.Slug,
-	})
-	if err != nil {
-		return safeerr.Wrap("update organization projection", err)
-	}
-	return nil
+func (u *unitOfWork) AcquireOrganizationLock(ctx context.Context, clerkOrganizationID string) error {
+	return u.queries.AcquireOrganizationAdvisoryLock(ctx, clerkOrganizationID)
 }
 
-func applyMembershipEvent(ctx context.Context, queries *sqlcgen.Queries, event organizationsync.Event, generator organizationid.Generator) error {
-	organization, err := queries.GetOrganizationByClerkID(ctx, event.ClerkOrganizationID)
+func (u *unitOfWork) LatestAggregateEvent(
+	ctx context.Context,
+	aggregateType string,
+	aggregateID string,
+	eventID string,
+) (organizationsync.Event, bool, error) {
+	row, err := u.queries.GetLatestAggregateEvent(ctx, sqlcgen.GetLatestAggregateEventParams{
+		AggregateType: aggregateType,
+		AggregateID:   aggregateID,
+		EventID:       eventID,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		id, generateErr := generator.New()
-		if generateErr != nil {
-			return safeerr.Wrap("generate pending organization ID", generateErr)
-		}
-		organization, err = queries.InsertOrganization(ctx, sqlcgen.InsertOrganizationParams{
-			ID: id, ClerkOrganizationID: event.ClerkOrganizationID, Status: "pending",
-		})
+		return organizationsync.Event{}, false, nil
 	}
 	if err != nil {
-		return safeerr.Wrap("ensure membership organization projection", err)
+		return organizationsync.Event{}, false, err
 	}
+	return organizationsync.Event{
+		EventID:    row.EventID,
+		Type:       row.EventType,
+		OccurredAt: row.OccurredAt.Time.UTC(),
+	}, true, nil
+}
 
-	existing, err := queries.GetMembershipByClerkID(ctx, event.Membership.ClerkMembershipID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return safeerr.Wrap("load membership for synchronization", err)
+func (u *unitOfWork) GetOrganization(ctx context.Context, clerkOrganizationID string) (organizationsync.Organization, bool, error) {
+	row, err := u.queries.GetOrganizationByClerkID(ctx, clerkOrganizationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return organizationsync.Organization{}, false, nil
 	}
-	if event.Type == organizationsync.EventMembershipDeleted {
-		if errors.Is(err, pgx.ErrNoRows) {
-			id, generateErr := generator.New()
-			if generateErr != nil {
-				return safeerr.Wrap("generate membership tombstone ID", generateErr)
-			}
-			_, insertErr := queries.InsertMembership(ctx, sqlcgen.InsertMembershipParams{
-				ID: id, ClerkMembershipID: event.Membership.ClerkMembershipID,
-				OrganizationID: organization.ID, ClerkUserID: event.Membership.ClerkUserID,
-				ClerkRole: event.Membership.ClerkRole, ApplicationRole: organizationsync.RoleViewer,
-				Status: "deleted",
-			})
-			if insertErr != nil {
-				return safeerr.Wrap("insert deleted membership tombstone", insertErr)
-			}
-			return nil
-		}
-		if existing.Status == "deleted" {
-			return nil
-		}
-		_, err = queries.MarkMembershipDeleted(ctx, event.Membership.ClerkMembershipID)
-		if err != nil {
-			return safeerr.Wrap("mark membership deleted", err)
-		}
-		return nil
+	if err != nil {
+		return organizationsync.Organization{}, false, err
 	}
+	return organizationFromRow(row), true, nil
+}
+
+func (u *unitOfWork) InsertOrganization(ctx context.Context, organization organizationsync.Organization) error {
+	_, err := u.queries.InsertOrganization(ctx, sqlcgen.InsertOrganizationParams{
+		ID:                  organization.ID,
+		ClerkOrganizationID: organization.ClerkOrganizationID,
+		Name:                organization.Name,
+		Slug:                organization.Slug,
+		Status:              organization.Status,
+	})
+	return err
+}
+
+func (u *unitOfWork) UpdateOrganizationProjection(
+	ctx context.Context,
+	clerkOrganizationID string,
+	name *string,
+	slug *string,
+	status string,
+) error {
+	_, err := u.queries.UpdateOrganizationProjection(ctx, sqlcgen.UpdateOrganizationProjectionParams{
+		ClerkOrganizationID: clerkOrganizationID,
+		Name:                name,
+		Slug:                slug,
+		Status:              status,
+	})
+	return err
+}
+
+func (u *unitOfWork) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) error {
+	_, err := u.queries.MarkOrganizationDeleted(ctx, clerkOrganizationID)
+	return err
+}
+
+func (u *unitOfWork) GetMembership(ctx context.Context, clerkMembershipID string) (organizationsync.Membership, bool, error) {
+	row, err := u.queries.GetMembershipByClerkID(ctx, clerkMembershipID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return organizationsync.Membership{}, false, nil
+	}
+	if err != nil {
+		return organizationsync.Membership{}, false, err
+	}
+	return membershipFromRow(row), true, nil
+}
+
+func (u *unitOfWork) GetActiveMembership(
+	ctx context.Context,
+	organizationID uuid.UUID,
+	clerkUserID string,
+) (organizationsync.Membership, bool, error) {
+	row, err := u.queries.GetActiveMembershipByOrganizationUser(ctx, sqlcgen.GetActiveMembershipByOrganizationUserParams{
+		OrganizationID: organizationID,
+		ClerkUserID:    clerkUserID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return organizationsync.Membership{}, false, nil
+	}
+	if err != nil {
+		return organizationsync.Membership{}, false, err
+	}
+	return membershipFromRow(row), true, nil
+}
+
+func (u *unitOfWork) CreateMembershipInsertSavepoint(ctx context.Context) error {
+	_, err := u.tx.Exec(ctx, createMembershipInsertSavepoint)
+	return err
+}
+
+func (u *unitOfWork) RollbackMembershipInsertSavepoint(ctx context.Context) error {
+	_, err := u.tx.Exec(ctx, rollbackMembershipInsertSavepoint)
+	return err
+}
+
+func (u *unitOfWork) ReleaseMembershipInsertSavepoint(ctx context.Context) error {
+	_, err := u.tx.Exec(ctx, releaseMembershipInsertSavepoint)
+	return err
+}
+
+func (u *unitOfWork) InsertMembership(ctx context.Context, membership organizationsync.Membership) error {
+	_, err := u.queries.InsertMembership(ctx, sqlcgen.InsertMembershipParams{
+		ID:                membership.ID,
+		ClerkMembershipID: membership.ClerkMembershipID,
+		OrganizationID:    membership.OrganizationID,
+		ClerkUserID:       membership.ClerkUserID,
+		ClerkRole:         membership.ClerkRole,
+		ApplicationRole:   membership.ApplicationRole,
+		Status:            membership.Status,
+	})
 	if err == nil {
-		if existing.Status == "deleted" {
-			return nil
-		}
-		_, updateErr := queries.UpdateMembershipClerkRole(ctx, sqlcgen.UpdateMembershipClerkRoleParams{
-			ClerkMembershipID: event.Membership.ClerkMembershipID,
-			ClerkRole:         event.Membership.ClerkRole,
-		})
-		if updateErr != nil {
-			return safeerr.Wrap("update membership Clerk role", updateErr)
-		}
-		return nil
-	}
-
-	id, generateErr := generator.New()
-	if generateErr != nil {
-		return safeerr.Wrap("generate membership ID", generateErr)
-	}
-	_, insertErr := queries.InsertMembership(ctx, sqlcgen.InsertMembershipParams{
-		ID: id, ClerkMembershipID: event.Membership.ClerkMembershipID,
-		OrganizationID: organization.ID, ClerkUserID: event.Membership.ClerkUserID,
-		ClerkRole:       event.Membership.ClerkRole,
-		ApplicationRole: organizationsync.InitialApplicationRole(event.Membership.ClerkRole),
-		Status:          "active",
-	})
-	if insertErr == nil {
 		return nil
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(insertErr, &pgErr) && pgErr.Code == "23505" {
-		conflicting, loadErr := queries.GetActiveMembershipByOrganizationUser(ctx, sqlcgen.GetActiveMembershipByOrganizationUserParams{
-			OrganizationID: organization.ID,
-			ClerkUserID:    event.Membership.ClerkUserID,
-		})
-		if loadErr == nil && conflicting.ClerkMembershipID == event.Membership.ClerkMembershipID {
-			return nil
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return &organizationsync.UniqueConstraintError{
+			Constraint: pgErr.ConstraintName,
+			Cause:      err,
 		}
-		if loadErr != nil && !errors.Is(loadErr, pgx.ErrNoRows) {
-			return safeerr.Wrap("load conflicting active membership", loadErr)
-		}
-		return errors.New("conflicting active organization membership")
 	}
-	return safeerr.Wrap("insert active organization membership", insertErr)
+	return err
+}
+
+func (u *unitOfWork) UpdateMembershipClerkRole(ctx context.Context, clerkMembershipID string, clerkRole *string) error {
+	_, err := u.queries.UpdateMembershipClerkRole(ctx, sqlcgen.UpdateMembershipClerkRoleParams{
+		ClerkMembershipID: clerkMembershipID,
+		ClerkRole:         clerkRole,
+	})
+	return err
+}
+
+func (u *unitOfWork) MarkMembershipDeleted(ctx context.Context, clerkMembershipID string) error {
+	_, err := u.queries.MarkMembershipDeleted(ctx, clerkMembershipID)
+	return err
+}
+
+func (u *unitOfWork) Commit(ctx context.Context) error   { return u.tx.Commit(ctx) }
+func (u *unitOfWork) Rollback(ctx context.Context) error { return u.tx.Rollback(ctx) }
+
+func organizationFromRow(row sqlcgen.OrganizationOrganization) organizationsync.Organization {
+	return organizationsync.Organization{
+		ID:                  row.ID,
+		ClerkOrganizationID: row.ClerkOrganizationID,
+		Name:                row.Name,
+		Slug:                row.Slug,
+		Status:              row.Status,
+	}
+}
+
+func membershipFromRow(row sqlcgen.OrganizationMembership) organizationsync.Membership {
+	return organizationsync.Membership{
+		ID:                row.ID,
+		ClerkMembershipID: row.ClerkMembershipID,
+		OrganizationID:    row.OrganizationID,
+		ClerkUserID:       row.ClerkUserID,
+		ClerkRole:         row.ClerkRole,
+		ApplicationRole:   row.ApplicationRole,
+		Status:            row.Status,
+	}
 }
