@@ -215,3 +215,8 @@ golangci-lint run ./...
 ```
 
 CI preserves all Identity integration scenarios and adds real PostgreSQL, signed organization webhook, tenant-isolation, Identity-dependency, CORS, cache-header and port-isolation scenarios.
+
+## Production operations
+
+Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
+

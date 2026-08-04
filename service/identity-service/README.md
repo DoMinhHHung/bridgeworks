@@ -337,3 +337,8 @@ invalid signature, wrong issuer, wrong authorized party, active, disabled,
 deleted, identity not ready, PostgreSQL outage/recovery, no DB mutation, CORS
 allowed/disallowed preflight, actual allowed-origin GET, `Cache-Control`, `Vary`,
 `WWW-Authenticate`, port bindings và response/log redaction.
+
+## Production operations
+
+Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
+
