@@ -98,9 +98,9 @@ create table organization.clerk_webhook_events (
         'organization.created',
         'organization.updated',
         'organization.deleted',
-        'organization_membership.created',
-        'organization_membership.updated',
-        'organization_membership.deleted'
+        'organizationMembership.created',
+        'organizationMembership.updated',
+        'organizationMembership.deleted'
     )),
     constraint clerk_webhook_events_aggregate_type_ck check (aggregate_type in ('organization', 'membership')),
     constraint clerk_webhook_events_aggregate_id_not_blank_ck check (btrim(aggregate_id) <> ''),
