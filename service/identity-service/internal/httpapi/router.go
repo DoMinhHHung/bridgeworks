@@ -13,6 +13,7 @@ type RouterConfig struct {
 	ReadinessTimeout           time.Duration
 	ClerkWebhookProcessTimeout time.Duration
 	ClerkWebhookMaxBodyBytes   int64
+	Metrics                    Metrics
 }
 
 func NewRouter(
@@ -30,6 +31,7 @@ func NewRouter(
 
 	router := chi.NewRouter()
 	router.Use(RequestID)
+	router.Use(HTTPObservability(logger, config.Metrics))
 	router.Use(Recoverer(logger))
 
 	router.Get("/health/live", livenessHandler(config.ServiceName))
@@ -40,6 +42,7 @@ func NewRouter(
 			logger,
 			clerkVerifier,
 			clerkProcessor,
+			config.Metrics,
 			config.ClerkWebhookMaxBodyBytes,
 			config.ClerkWebhookProcessTimeout,
 		),
