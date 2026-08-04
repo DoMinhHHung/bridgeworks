@@ -10,6 +10,29 @@ mkdir -p "${work}"
 base_url='http://127.0.0.1:9080'
 identity_webhook_url="${base_url}/api/v1/identity/webhooks/clerk"
 organization_webhook_url="${base_url}/api/v1/organizations/webhooks/clerk"
+apisix_config='gateway/apisix/conf/apisix.yaml'
+apisix_backup="${work}/apisix.yaml"
+cp "${apisix_config}" "${apisix_backup}"
+
+identity_container="$(docker compose ps -q identity-service)"
+network_name="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "${identity_container}")"
+test -n "${network_name}"
+probe_container="bridgeworks-observability-probe-${GITHUB_RUN_ID:-local}"
+docker rm --force "${probe_container}" >/dev/null 2>&1 || true
+docker run --detach --rm --name "${probe_container}" --network "${network_name}" \
+  --entrypoint sleep curlimages/curl:8.12.1 300 >/dev/null
+
+cleanup() {
+  cp "${apisix_backup}" "${apisix_config}" >/dev/null 2>&1 || true
+  docker rm --force "${probe_container}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+probe_status() {
+  local method="$1" url="$2"
+  docker exec "${probe_container}" curl --show-error --silent --output /dev/null \
+    --write-out '%{http_code}' --request "${method}" "${url}"
+}
 
 send_signed() {
   local url="$1" secret="$2" event_id="$3" payload="$4" output="$5" request_id="$6"
@@ -20,6 +43,57 @@ send_signed() {
       -payload-file "${payload}" -body-output "${output}" -request-id "${request_id}"
   )
 }
+
+# Private listeners expose only metrics behavior, never application handlers.
+for service in identity-service organization-service; do
+  test "$(probe_status GET "http://${service}:9090/metrics")" = "200"
+  test "$(probe_status POST "http://${service}:9090/metrics")" = "405"
+  test "$(probe_status GET "http://${service}:9090/health/live")" = "404"
+  test "$(probe_status GET "http://${service}:9090/health/ready")" = "404"
+  test "$(probe_status GET "http://${service}:9090/arbitrary/private/path")" = "404"
+  test "$(probe_status GET "http://${service}:8080/metrics")" = "404"
+done
+test "$(probe_status GET 'http://identity-service:9090/me')" = "404"
+test "$(probe_status GET 'http://organization-service:9090/organizations/current')" = "404"
+test "$(probe_status GET 'http://organization-service:9090/organizations/current/membership')" = "404"
+
+# Add an ephemeral CI-only APISIX route so a non-standard method reaches the
+# real Identity listener without changing the committed public route contract.
+python3 - "${apisix_config}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+marker = "#END"
+route = """  - id: bridgeworks-observability-custom-method-probe
+    name: bridgeworks-observability-custom-method-probe
+    uri: /__observability/custom-method
+    methods: [X-CUSTOM-123]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      proxy-rewrite: { uri: /__observability/custom-method }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 2, read: 2 }
+      nodes: { "identity-service:8080": 1 }
+"""
+if marker not in text:
+    raise SystemExit("APISIX standalone end marker missing")
+path.write_text(text.replace(marker, route + marker, 1))
+PY
+
+custom_method_status=''
+for _ in $(seq 1 30); do
+  custom_method_status="$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' \
+    --request X-CUSTOM-123 -H 'X-Request-Id: obs-custom-method' \
+    "${base_url}/__observability/custom-method")"
+  if [ "${custom_method_status}" = "404" ]; then
+    break
+  fi
+  sleep 1
+done
+test "${custom_method_status}" = "404"
 
 cat > "${work}/identity.json" <<'JSON'
 {"type":"user.created","timestamp":1785826800000,"data":{"id":"user_obs_metrics","primary_email_address_id":"email_obs_metrics","email_addresses":[{"id":"email_obs_metrics","email_address":"observability@example.test","verification":{"status":"verified"}}]}}
@@ -70,6 +144,8 @@ for metric in http_requests_total http_request_duration_seconds http_requests_in
 done
 
 grep --quiet 'route="/me"' "${identity_metrics}"
+grep --quiet 'method="OTHER",route="unknown"' "${identity_metrics}"
+! grep --quiet --fixed-strings 'X-CUSTOM-123' "${identity_metrics}"
 grep --quiet 'aggregate="user",outcome="processed"' "${identity_metrics}"
 grep --quiet 'aggregate="user",outcome="duplicate"' "${identity_metrics}"
 grep --quiet 'aggregate="user",outcome="rejected"' "${identity_metrics}"
@@ -90,12 +166,13 @@ identity_logs="${work}/identity.logs"
 organization_logs="${work}/organization.logs"
 docker compose logs --no-color identity-service > "${identity_logs}"
 docker compose logs --no-color organization-service > "${organization_logs}"
-for request_id in obs-identity-success obs-identity-failure; do
+for request_id in obs-identity-success obs-identity-failure obs-custom-method; do
   test "$(grep 'http request completed' "${identity_logs}" | grep -c "\"request_id\":\"${request_id}\"")" = "1"
 done
 for request_id in obs-organization-success obs-organization-current obs-organization-current-membership; do
   test "$(grep 'http request completed' "${organization_logs}" | grep -c "\"request_id\":\"${request_id}\"")" = "1"
 done
+grep 'http request completed' "${identity_logs}" | grep '"request_id":"obs-custom-method"' | grep --quiet '"method":"X-CUSTOM-123"'
 grep 'http request completed' "${identity_logs}" | grep --quiet '"route":"/webhooks/clerk"'
 grep 'http request completed' "${organization_logs}" | grep --quiet '"route":"/organizations/current"'
 for secret in user_obs_metrics org_obs_metrics mem_obs_metrics observability@example.test; do
@@ -113,5 +190,7 @@ done
 
 curl --fail --show-error --silent --output /dev/null "${base_url}/api/v1/identity/health/ready"
 curl --fail --show-error --silent --output /dev/null "${base_url}/api/v1/organizations/health/ready"
+test "$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' "${base_url}/api/v1/me")" = "401"
+test "$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' "${base_url}/api/v1/organizations/current")" = "401"
 
-echo "Private metrics and structured access-log regressions passed."
+echo "Private metrics, bounded methods, and structured access-log regressions passed."
