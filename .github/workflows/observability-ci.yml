@@ -15,6 +15,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  normalization-patch:
+    name: Generate formatting and module patch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Generate deterministic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for module in service/identity-service service/organization-service; do
+            find "${module}" -name '*.go' -type f -print0 | xargs -0 -r gofmt -w
+            (cd "${module}" && go mod tidy)
+          done
+          git diff -- \
+            service/identity-service \
+            service/organization-service > observability-normalization.patch
+          test -s observability-normalization.patch
+
+      - name: Upload deterministic patch
+        uses: actions/upload-artifact@v6
+        with:
+          name: observability-normalization-patch
+          path: observability-normalization.patch
+          if-no-files-found: error
+          retention-days: 1
+
   validation:
     name: Observability repository and Go validation
     runs-on: ubuntu-latest
