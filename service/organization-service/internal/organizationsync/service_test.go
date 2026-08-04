@@ -346,7 +346,10 @@ func TestServiceDeletedMembershipNeverRestores(t *testing.T) {
 	uow.organizationFound = true
 	uow.organization = Organization{ID: testOrganizationID, Status: "active"}
 	uow.membershipFound = true
-	uow.membership = Membership{ID: testMembershipID, Status: "deleted"}
+	uow.membership = Membership{
+		ID: testMembershipID, ClerkMembershipID: "mem-1", OrganizationID: testOrganizationID,
+		ClerkUserID: "user-1", Status: "deleted",
+	}
 	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
 
 	if err := service.Process(context.Background(), membershipEvent(EventMembershipCreated, nil)); err != nil {
