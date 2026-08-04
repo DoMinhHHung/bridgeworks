@@ -572,6 +572,10 @@ jobs:
                   assert value not in body, f"{path.name} leaked forbidden value: {value[:32]!r}"
           PY
 
+      - name: Verify current user browser CORS and cache headers
+        shell: bash
+        run: bash .github/scripts/verify-current-user-browser.sh
+
       - name: Verify dependency outage health semantics
         shell: bash
         run: |
