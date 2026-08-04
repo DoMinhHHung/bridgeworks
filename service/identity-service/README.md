@@ -67,8 +67,15 @@ Mọi authentication failure đều trả cùng contract:
 }
 ```
 
-Client không nhận biết token bị thiếu, malformed, expired, sai signature, issuer
-hay authorized party.
+Mọi 401 authentication rejection đồng thời trả:
+
+```http
+WWW-Authenticate: Bearer realm="bridgeworks"
+```
+
+Header, body và logs không chứa raw token error, issuer, subject, session ID,
+authorized party hoặc validation details. Client không nhận biết token bị thiếu,
+malformed, expired, sai signature, issuer hay authorized party.
 
 ## Authenticated current user
 
@@ -95,6 +102,16 @@ Active local account trả:
 `primary_email` có thể là `null`. Response không chứa `clerk_user_id`,
 `session_id`, JWT, claims hoặc webhook data.
 
+Mọi `/me` response, bao gồm 200, 401, 403, 409 và 503, đều trả:
+
+```http
+Cache-Control: no-store
+Vary: Authorization
+```
+
+`Vary` được append thay vì overwrite, nên gateway có thể giữ thêm `Origin` cho
+CORS mà không làm mất `Authorization`.
+
 Local lifecycle quyết định authorization:
 
 | Local state | HTTP | Code |
@@ -107,6 +124,27 @@ Local lifecycle quyết định authorization:
 
 Valid Clerk token nhưng local projection chưa có không tạo user và không gọi
 Clerk API. Client retry sau khi webhook synchronization hoàn tất.
+
+### Browser CORS
+
+Route APISIX `bridgeworks-identity-me` chấp nhận `GET` và browser preflight
+`OPTIONS`. Allowed origins được lấy trực tiếp từ cùng comma-separated
+`CLERK_AUTHORIZED_PARTIES` value dùng cho JWT authorized-party validation.
+Không dùng wildcard origin và không bật credentials/cookies.
+
+CORS contract:
+
+```text
+allow methods:  GET,OPTIONS
+allow headers:  Authorization,Content-Type,X-Request-Id
+expose headers: X-Request-Id,Retry-After
+max age:        600 seconds
+credentials:    false
+```
+
+Allowed preflight nhận `Access-Control-Allow-Origin` bằng đúng requested allowed
+origin. Origin ngoài allowlist không nhận header đó. Actual authenticated GET từ
+allowed origin expose `X-Request-Id` và `Retry-After` cho browser code.
 
 ## Clerk webhook setup
 
@@ -203,7 +241,8 @@ trailing slash. Origin production phải dùng HTTPS. HTTP chỉ hợp lệ cho
 
 `CLERK_AUTHORIZED_PARTIES` là comma-separated origin list. Mỗi item được trim;
 blank item, duplicate hoặc non-local HTTP origin bị reject. Phải có ít nhất một
-party.
+party. Compose truyền cùng value này vào APISIX để standalone YAML interpolate
+CORS allowlist; không duy trì allowlist thứ hai.
 
 `CLERK_AUTH_LEEWAY` phải lớn hơn 0 và không quá 30 giây.
 
@@ -259,10 +298,11 @@ Identity port 8080 và PostgreSQL port 5432 không publish ra host.
 ## HTTP contracts
 
 ```text
-GET  /api/v1/me
-GET  /api/v1/identity/health/live
-GET  /api/v1/identity/health/ready
-POST /api/v1/identity/webhooks/clerk
+GET     /api/v1/me
+OPTIONS /api/v1/me
+GET     /api/v1/identity/health/live
+GET     /api/v1/identity/health/ready
+POST    /api/v1/identity/webhooks/clerk
 ```
 
 Webhook success, duplicate, stale và verified unsupported events đều trả `204`
@@ -292,7 +332,8 @@ make gateway-smoke
 
 CI generate ephemeral RSA keypairs ngoài Docker build context, inject chỉ public
 verification key vào service và sign Clerk-shaped session tokens cho tests. CI
-chạy webhook scenarios hiện hữu cùng `/me` scenarios: missing token, invalid
-signature, wrong issuer, wrong authorized party, active, disabled, deleted,
-identity not ready, PostgreSQL outage/recovery, no DB mutation, port bindings và
-response/log redaction.
+chạy webhook scenarios hiện hữu cùng `/me` scenarios: missing/malformed token,
+invalid signature, wrong issuer, wrong authorized party, active, disabled,
+deleted, identity not ready, PostgreSQL outage/recovery, no DB mutation, CORS
+allowed/disallowed preflight, actual allowed-origin GET, `Cache-Control`, `Vary`,
+`WWW-Authenticate`, port bindings và response/log redaction.
