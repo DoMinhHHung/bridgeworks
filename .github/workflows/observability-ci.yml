@@ -71,6 +71,7 @@ jobs:
           ! grep --quiet --fixed-strings 'methods: [PURGE]' .github/scripts/verify-observability.sh
           grep --quiet --fixed-strings 'route_selected=true' .github/scripts/verify-observability.sh
           grep --quiet --fixed-strings 'custom_method_headers' .github/scripts/verify-observability.sh
+          grep --quiet --fixed-strings 'test "${custom_method_status}" = "405"' .github/scripts/verify-observability.sh
           ! grep -R --line-number 'prometheus.Default' service/identity-service service/organization-service
           ! grep -R --line-number 'promauto' service/identity-service service/organization-service
           grep --quiet 'type ClerkWebhookOutcomeProcessor interface' service/identity-service/internal/httpapi/clerk_webhook.go
