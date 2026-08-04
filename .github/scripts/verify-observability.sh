@@ -85,15 +85,22 @@ path.write_text(text.replace(marker, route + marker, 1))
 PY
 
 custom_method_status=''
+custom_method_headers="${work}/custom-method.headers"
+route_selected=false
 for _ in $(seq 1 30); do
-  custom_method_status="$(curl --show-error --silent --output /dev/null --write-out '%{http_code}' \
+  : > "${custom_method_headers}"
+  custom_method_status="$(curl --show-error --silent --output /dev/null \
+    --dump-header "${custom_method_headers}" --write-out '%{http_code}' \
     --request PURGE -H 'X-Request-Id: obs-custom-method' \
     "${base_url}/__observability/custom-method")"
-  if [ "${custom_method_status}" = "404" ]; then
+  if grep --ignore-case --quiet --extended-regexp \
+    '^X-Request-Id:[[:space:]]*obs-custom-method\r?$' "${custom_method_headers}"; then
+    route_selected=true
     break
   fi
   sleep 1
 done
+test "${route_selected}" = "true"
 test "${custom_method_status}" = "404"
 
 cat > "${work}/identity.json" <<'JSON'
