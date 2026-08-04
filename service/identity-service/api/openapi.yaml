@@ -1,9 +1,123 @@
 openapi: 3.1.0
 info:
   title: BridgeWorks Identity Service API
-  version: 0.3.0
-  description: Identity health and public Clerk webhook endpoints exposed through APISIX.
+  version: 0.4.1
+  description: Identity health, Clerk webhook synchronization, and authenticated current-user projection exposed through APISIX.
 paths:
+  /api/v1/me:
+    get:
+      operationId: getCurrentIdentityUser
+      summary: Return the authenticated BridgeWorks identity projection
+      description: Requires an Authorization header containing a valid Clerk session token as a Bearer credential. Clerk proves identity; Identity Service enforces the local account lifecycle. Browser origins configured in CLERK_AUTHORIZED_PARTIES receive route-scoped CORS headers. Every response is non-cacheable and varies on Authorization.
+      security:
+        - ClerkSessionToken: []
+      responses:
+        "200":
+          description: Active local identity projection
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentUser"
+        "401":
+          description: Bearer token is missing or invalid
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
+            WWW-Authenticate:
+              $ref: "#/components/headers/BearerChallenge"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                unauthorized:
+                  value:
+                    code: unauthorized
+                    message: authentication required
+                    request_id: current-user-request-id
+                    details: null
+        "403":
+          description: Local BridgeWorks account is disabled or deleted
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                disabled:
+                  value:
+                    code: account_disabled
+                    message: account is disabled
+                    request_id: current-user-request-id
+                    details: null
+                deleted:
+                  value:
+                    code: account_deleted
+                    message: account is deleted
+                    request_id: current-user-request-id
+                    details: null
+        "409":
+          description: Clerk identity is valid but the local webhook projection has not arrived yet
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
+            Retry-After:
+              description: Suggested delay in seconds before retrying the current-user request.
+              schema:
+                type: integer
+                const: 2
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                identityNotReady:
+                  value:
+                    code: identity_not_ready
+                    message: identity synchronization is not complete
+                    request_id: current-user-request-id
+                    details: null
+        "503":
+          description: PostgreSQL is unavailable or the local lookup timed out
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/CurrentUserCacheControl"
+            Vary:
+              $ref: "#/components/headers/CurrentUserVary"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                dependencyUnavailable:
+                  value:
+                    code: service_unavailable
+                    message: service temporarily unavailable
+                    request_id: current-user-request-id
+                    details: null
   /api/v1/identity/health/live:
     get:
       operationId: getIdentityLiveness
@@ -91,11 +205,34 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
 components:
+  securitySchemes:
+    ClerkSessionToken:
+      type: http
+      scheme: bearer
+      bearerFormat: Clerk session token
+      description: Clerk session JWT passed in the Authorization header. Verification key and claim internals are not part of the public API contract.
   headers:
     RequestID:
       description: Request correlation identifier generated or forwarded by APISIX.
       schema:
         type: string
+    CurrentUserCacheControl:
+      description: Prevents storage of the authenticated current-user response.
+      schema:
+        type: string
+        const: no-store
+    CurrentUserVary:
+      description: Indicates that the current-user representation depends on the Authorization request header. Gateway CORS processing may append Origin.
+      schema:
+        type: string
+        examples:
+          - Authorization
+          - Authorization, Origin
+    BearerChallenge:
+      description: Stable Bearer authentication challenge without token validation details.
+      schema:
+        type: string
+        const: 'Bearer realm="bridgeworks"'
   responses:
     ErrorResponse:
       description: Request failed
@@ -107,6 +244,32 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    CurrentUser:
+      type: object
+      additionalProperties: false
+      required: [id, id_user, primary_email, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable UUIDv7 generated by Identity Service.
+        id_user:
+          type: string
+          pattern: "^bw[0-9]{12}$"
+          description: Public BridgeWorks user identifier.
+        primary_email:
+          type: [string, "null"]
+          format: email
+          description: Verified Clerk primary-email projection when available.
+        status:
+          type: string
+          const: active
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     HealthResponse:
       type: object
       additionalProperties: false

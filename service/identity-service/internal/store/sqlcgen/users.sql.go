@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const getAppUserByClerkID = `-- name: GetAppUserByClerkID :one
+const getAppUserByClerkUserID = `-- name: GetAppUserByClerkUserID :one
 select
     id,
     clerk_user_id,
@@ -24,8 +24,8 @@ from app.app_users
 where clerk_user_id = $1
 `
 
-func (q *Queries) GetAppUserByClerkID(ctx context.Context, clerkUserID string) (AppAppUser, error) {
-	row := q.db.QueryRow(ctx, getAppUserByClerkID, clerkUserID)
+func (q *Queries) GetAppUserByClerkUserID(ctx context.Context, clerkUserID string) (AppAppUser, error) {
+	row := q.db.QueryRow(ctx, getAppUserByClerkUserID, clerkUserID)
 	var i AppAppUser
 	err := row.Scan(
 		&i.ID,

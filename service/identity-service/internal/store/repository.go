@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/clerkwebhook"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/currentuser"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform/safeerr"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/store/sqlcgen"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
@@ -15,15 +16,16 @@ import (
 
 const idUserUniqueConstraint = "app_users_id_user_uq"
 
-type transactionBeginner interface {
+type database interface {
+	sqlcgen.DBTX
 	Begin(context.Context) (pgx.Tx, error)
 }
 
 type Repository struct {
-	database transactionBeginner
+	database database
 }
 
-func New(database transactionBeginner) *Repository {
+func New(database database) *Repository {
 	return &Repository{database: database}
 }
 
@@ -41,6 +43,33 @@ func (r *Repository) Begin(ctx context.Context) (usersync.Transaction, error) {
 		tx:      tx,
 		queries: sqlcgen.New(tx),
 	}, nil
+}
+
+func (r *Repository) GetCurrentUserByClerkUserID(
+	ctx context.Context,
+	clerkUserID string,
+) (currentuser.User, bool, error) {
+	if r == nil || r.database == nil {
+		return currentuser.User{}, false, errors.New("identity repository is not initialized")
+	}
+
+	row, err := sqlcgen.New(r.database).GetAppUserByClerkUserID(ctx, clerkUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return currentuser.User{}, false, nil
+	}
+	if err != nil {
+		return currentuser.User{}, false, safeerr.Wrap("read current local identity", err)
+	}
+
+	return currentuser.User{
+		ID:           row.ID,
+		ClerkUserID:  row.ClerkUserID,
+		PrimaryEmail: row.PrimaryEmail,
+		IDUser:       row.IDUser,
+		Status:       row.Status,
+		CreatedAt:    row.CreatedAt.Time.UTC(),
+		UpdatedAt:    row.UpdatedAt.Time.UTC(),
+	}, true, nil
 }
 
 func (r *Repository) IsIDUserCollision(err error) bool {
@@ -95,7 +124,7 @@ func (t *transaction) HasSupersedingEvent(ctx context.Context, event clerkwebhoo
 }
 
 func (t *transaction) GetUserByClerkID(ctx context.Context, clerkUserID string) (usersync.User, bool, error) {
-	row, err := t.queries.GetAppUserByClerkID(ctx, clerkUserID)
+	row, err := t.queries.GetAppUserByClerkUserID(ctx, clerkUserID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return usersync.User{}, false, nil
 	}

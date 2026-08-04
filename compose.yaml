@@ -4,6 +4,8 @@ services:
   apisix:
     image: apache/apisix:3.17.0-debian
     restart: unless-stopped
+    environment:
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:?CLERK_AUTHORIZED_PARTIES is required}
     ports:
       - "${APISIX_HTTP_PORT:-9080}:9080"
     volumes:
@@ -82,6 +84,10 @@ services:
       CLERK_WEBHOOK_SIGNING_SECRET: ${CLERK_WEBHOOK_SIGNING_SECRET:?CLERK_WEBHOOK_SIGNING_SECRET is required}
       CLERK_WEBHOOK_PROCESS_TIMEOUT: ${CLERK_WEBHOOK_PROCESS_TIMEOUT:-5s}
       CLERK_WEBHOOK_MAX_BODY_BYTES: ${CLERK_WEBHOOK_MAX_BODY_BYTES:-1048576}
+      CLERK_JWT_KEY: ${CLERK_JWT_KEY:?CLERK_JWT_KEY is required}
+      CLERK_ISSUER: ${CLERK_ISSUER:?CLERK_ISSUER is required}
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:?CLERK_AUTHORIZED_PARTIES is required}
+      CLERK_AUTH_LEEWAY: ${CLERK_AUTH_LEEWAY:-5s}
     expose:
       - "8080"
     depends_on:

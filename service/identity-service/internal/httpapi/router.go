@@ -21,7 +21,13 @@ func NewRouter(
 	readinessChecker ReadinessChecker,
 	clerkVerifier ClerkWebhookVerifier,
 	clerkProcessor ClerkWebhookProcessor,
+	authenticate func(http.Handler) http.Handler,
+	currentUserGetter CurrentUserGetter,
 ) http.Handler {
+	if authenticate == nil {
+		authenticate = func(next http.Handler) http.Handler { return next }
+	}
+
 	router := chi.NewRouter()
 	router.Use(RequestID)
 	router.Use(Recoverer(logger))
@@ -38,6 +44,7 @@ func NewRouter(
 			config.ClerkWebhookProcessTimeout,
 		),
 	)
+	router.With(currentUserResponseHeaders, authenticate).Get("/me", currentUserHandler(logger, currentUserGetter))
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "route not found", nil)

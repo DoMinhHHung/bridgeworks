@@ -1,27 +1,150 @@
 # identity-service
 
 Identity boundary của BridgeWorks. Service đồng bộ Clerk user events vào local
-PostgreSQL projection qua public signed webhook; chưa implement session/JWT
-middleware hoặc `GET /api/v1/me`.
+PostgreSQL projection qua public signed webhook và xác thực Clerk session token
+cho authenticated `GET /api/v1/me`.
 
 ## Ownership
 
 Clerk sở hữu authentication, sessions, password/social login, magic links và
-email verification. Identity service chỉ sở hữu:
+email verification. Identity Service chỉ sở hữu:
 
 - immutable Clerk user mapping;
 - local BridgeWorks lifecycle `active|disabled|deleted`;
 - public `id_user`;
 - minimal verified primary-email projection;
-- transactional Clerk webhook inbox.
+- transactional Clerk webhook inbox;
+- authorization decision dựa trên local account status.
 
 `status=disabled` là BridgeWorks-owned và Clerk updates không được re-enable.
 `status=deleted` là tombstone; service không hard delete. `primary_email` chỉ là
 projection của Clerk primary address khi address đó có verification status
 `verified`. Service khác không được đọc schema `app` trực tiếp.
 
-`migrations/000001_create_app_users.sql` là locked schema contract. PR webhook
-không sửa migration hoặc thêm migration mới.
+`migrations/000001_create_app_users.sql` là locked schema contract. Session auth
+và `/me` không sửa migration hoặc thêm migration mới.
+
+## Authentication trust boundary
+
+Request path:
+
+```text
+Client Authorization: Bearer <Clerk session token>
+→ APISIX request-id + proxy rewrite
+→ Identity Service Clerk SDK verification
+→ narrow Principal{ClerkUserID, SessionID}
+→ local app user lookup
+→ local status authorization
+→ public /me response
+```
+
+APISIX không verify JWT và không có auth plugin. Nó forward `Authorization` tới
+Identity Service. Service dùng official stable
+`github.com/clerk/clerk-sdk-go/v2 v2.7.0` middleware
+`WithHeaderAuthorization` với:
+
+- configured RSA JSON Web Key;
+- exact issuer binding;
+- allowed authorized parties;
+- bounded clock-skew leeway;
+- custom failure handler để giữ consistent JSON error envelope.
+
+Chỉ verified claims mới được dùng. Boundary đọc `iss`, `sub`, `sid`, `azp`,
+`exp`, và `nbf`; application layer chỉ nhận narrow principal. Raw token, full
+claims, Clerk error, subject đầy đủ và session ID đầy đủ không được log.
+
+Service không dùng `CLERK_SECRET_KEY`, không gọi Clerk Backend API, không fetch
+Clerk user trong request path và không tự tạo local user từ `/me`.
+
+Mọi authentication failure đều trả cùng contract:
+
+```json
+{
+  "code": "unauthorized",
+  "message": "authentication required",
+  "request_id": "...",
+  "details": null
+}
+```
+
+Mọi 401 authentication rejection đồng thời trả:
+
+```http
+WWW-Authenticate: Bearer realm="bridgeworks"
+```
+
+Header, body và logs không chứa raw token error, issuer, subject, session ID,
+authorized party hoặc validation details. Client không nhận biết token bị thiếu,
+malformed, expired, sai signature, issuer hay authorized party.
+
+## Authenticated current user
+
+Public gateway endpoint:
+
+```http
+GET /api/v1/me
+Authorization: Bearer <Clerk session token>
+```
+
+Active local account trả:
+
+```json
+{
+  "id": "0198f3be-bf6f-7b0a-8a25-f8433567e0c1",
+  "id_user": "bw012303082645",
+  "primary_email": "developer@example.com",
+  "status": "active",
+  "created_at": "2026-08-03T03:04:05Z",
+  "updated_at": "2026-08-03T03:04:05Z"
+}
+```
+
+`primary_email` có thể là `null`. Response không chứa `clerk_user_id`,
+`session_id`, JWT, claims hoặc webhook data.
+
+Mọi `/me` response, bao gồm 200, 401, 403, 409 và 503, đều trả:
+
+```http
+Cache-Control: no-store
+Vary: Authorization
+```
+
+`Vary` được append thay vì overwrite, nên gateway có thể giữ thêm `Origin` cho
+CORS mà không làm mất `Authorization`.
+
+Local lifecycle quyết định authorization:
+
+| Local state | HTTP | Code |
+| --- | ---: | --- |
+| `active` | 200 | public current-user projection |
+| `disabled` | 403 | `account_disabled` |
+| `deleted` | 403 | `account_deleted` |
+| projection chưa có | 409 | `identity_not_ready`, `Retry-After: 2` |
+| PostgreSQL error/timeout | 503 | `service_unavailable` |
+
+Valid Clerk token nhưng local projection chưa có không tạo user và không gọi
+Clerk API. Client retry sau khi webhook synchronization hoàn tất.
+
+### Browser CORS
+
+Route APISIX `bridgeworks-identity-me` chấp nhận `GET` và browser preflight
+`OPTIONS`. Allowed origins được lấy trực tiếp từ cùng comma-separated
+`CLERK_AUTHORIZED_PARTIES` value dùng cho JWT authorized-party validation.
+Không dùng wildcard origin và không bật credentials/cookies.
+
+CORS contract:
+
+```text
+allow methods:  GET,OPTIONS
+allow headers:  Authorization,Content-Type,X-Request-Id
+expose headers: X-Request-Id,Retry-After
+max age:        600 seconds
+credentials:    false
+```
+
+Allowed preflight nhận `Access-Control-Allow-Origin` bằng đúng requested allowed
+origin. Origin ngoài allowlist không nhận header đó. Actual authenticated GET từ
+allowed origin expose `X-Request-Id` và `Retry-After` cho browser code.
 
 ## Clerk webhook setup
 
@@ -103,14 +226,32 @@ Exact `app_users_id_user_uq` collision được retry tối đa 5 lần; error k
 | `CLERK_WEBHOOK_SIGNING_SECRET` | required |
 | `CLERK_WEBHOOK_PROCESS_TIMEOUT` | `5s` |
 | `CLERK_WEBHOOK_MAX_BODY_BYTES` | `1048576` |
+| `CLERK_JWT_KEY` | required |
+| `CLERK_ISSUER` | required |
+| `CLERK_AUTHORIZED_PARTIES` | required |
+| `CLERK_AUTH_LEEWAY` | `5s` |
+
+`CLERK_JWT_KEY` chứa public JWT verification key từ Clerk và được trim outer
+whitespace. Không log hoặc echo key trong config errors. Dummy key trong
+`.env.example` là test-only public key, không phải production credential.
+
+`CLERK_ISSUER` được compare exact với verified `iss`. Config không normalize
+trailing slash. Origin production phải dùng HTTPS. HTTP chỉ hợp lệ cho
+`localhost` hoặc `127.0.0.1`.
+
+`CLERK_AUTHORIZED_PARTIES` là comma-separated origin list. Mỗi item được trim;
+blank item, duplicate hoặc non-local HTTP origin bị reject. Phải có ít nhất một
+party. Compose truyền cùng value này vào APISIX để standalone YAML interpolate
+CORS allowlist; không duy trì allowlist thứ hai.
+
+`CLERK_AUTH_LEEWAY` phải lớn hơn 0 và không quá 30 giây.
 
 `CLERK_WEBHOOK_PROCESS_TIMEOUT` phải lớn hơn 0, không quá 8 giây và nhỏ hơn
 `HTTP_WRITE_TIMEOUT`. APISIX webhook `send`/`read` timeout được giữ cố định ở 10
-giây trong PR này, vì vậy webhook processing phải hoàn tất trước gateway timeout.
-Không cấu hình APISIX timeout qua environment trong PR này.
+giây, vì vậy webhook processing phải hoàn tất trước gateway timeout.
 
 Webhook max body phải lớn hơn 0 và không quá 5 MiB. Signing secret không được
-blank. Config errors không echo secret hoặc database URL.
+blank. Config errors không echo secret, JWT key hoặc database URL.
 
 Runtime và migration database credentials vẫn tách biệt:
 
@@ -128,6 +269,10 @@ Runtime và migration database credentials vẫn tách biệt:
 sqlc config version 2 dùng PostgreSQL + `pgx/v5`. Generated code được commit dưới
 `internal/store/sqlcgen` và không sửa thủ công.
 
+`GetAppUserByClerkUserID` chỉ select fields cần cho current-user projection.
+Repository chuyển generated row sang narrow application model và phân biệt
+`pgx.ErrNoRows` với operational database failure.
+
 ```bash
 make identity-sqlc-generate
 make identity-sqlc-check
@@ -144,15 +289,20 @@ make stack-up
 make gateway-smoke
 ```
 
+Thay dummy Clerk public key, issuer và authorized parties bằng values của Clerk
+instance tương ứng trước khi dùng ngoài local/CI. Không thêm secret key.
+
 APISIX không phụ thuộc Compose vào PostgreSQL/migration/identity-service.
 Identity port 8080 và PostgreSQL port 5432 không publish ra host.
 
 ## HTTP contracts
 
 ```text
-GET  /api/v1/identity/health/live
-GET  /api/v1/identity/health/ready
-POST /api/v1/identity/webhooks/clerk
+GET     /api/v1/me
+OPTIONS /api/v1/me
+GET     /api/v1/identity/health/live
+GET     /api/v1/identity/health/ready
+POST    /api/v1/identity/webhooks/clerk
 ```
 
 Webhook success, duplicate, stale và verified unsupported events đều trả `204`
@@ -180,6 +330,10 @@ make stack-up
 make gateway-smoke
 ```
 
-CI gửi signed fixtures qua APISIX và verify invalid signature, create, duplicate,
-update, disabled ownership, delete, stale ordering, unknown-user tombstone,
-database outage/retry, port bindings và response/log redaction.
+CI generate ephemeral RSA keypairs ngoài Docker build context, inject chỉ public
+verification key vào service và sign Clerk-shaped session tokens cho tests. CI
+chạy webhook scenarios hiện hữu cùng `/me` scenarios: missing/malformed token,
+invalid signature, wrong issuer, wrong authorized party, active, disabled,
+deleted, identity not ready, PostgreSQL outage/recovery, no DB mutation, CORS
+allowed/disallowed preflight, actual allowed-origin GET, `Cache-Control`, `Vary`,
+`WWW-Authenticate`, port bindings và response/log redaction.
