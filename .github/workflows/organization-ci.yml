@@ -22,6 +22,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Verify clean checkout and main ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --short)"
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor origin/main HEAD
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -47,7 +55,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1
           git diff --exit-code origin/main HEAD -- \
             service/identity-service/migrations/000001_create_app_users.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
