@@ -11,7 +11,7 @@ repo-check:
 	@test -f gateway/apisix/conf/config.yaml
 	@test -f gateway/apisix/conf/apisix.yaml
 	@test -x gateway/apisix/scripts/smoke-test.sh
-	@test -x gateway/apisix/scripts/organization-smoke-test.sh
+	@test -f gateway/apisix/scripts/organization-smoke-test.sh
 	@test -f service/identity-service/go.mod
 	@test -f service/identity-service/Dockerfile
 	@test -f service/identity-service/cmd/identity-migrate/main.go
@@ -55,7 +55,7 @@ gateway-smoke:
 	./gateway/apisix/scripts/smoke-test.sh
 
 organization-smoke:
-	./gateway/apisix/scripts/organization-smoke-test.sh
+	bash ./gateway/apisix/scripts/organization-smoke-test.sh
 
 identity-migrate-up:
 	docker compose run --rm identity-migrate up
