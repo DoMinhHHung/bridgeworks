@@ -16,6 +16,72 @@ loadtest_require_command() {
   command -v "$1" >/dev/null 2>&1 || loadtest_die "required command is unavailable: $1"
 }
 
+loadtest_is_supported_scenario() {
+  case "$1" in
+    identity_me|organization_current|organization_membership|organization_dependency|identity_user_unique|identity_user_retry|organization_unique|organization_retry|membership_unique|membership_retry)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+loadtest_target_service_for_scenario() {
+  case "$1" in
+    identity_*) printf '%s\n' identity-service ;;
+    *) printf '%s\n' organization-service ;;
+  esac
+}
+
+loadtest_validate_replica_count() {
+  local name="$1" value="$2"
+  [[ "${value}" =~ ^[0-9]+$ ]] || loadtest_die "${name} must be an integer from 1 through 5"
+  (( value >= 1 && value <= 5 )) || loadtest_die "${name} must be between 1 and 5"
+}
+
+loadtest_validate_configuration() {
+  local profile="$1" scenario="$2" degradation_mode="$3"
+  local identity_replicas="$4" organization_replicas="$5"
+
+  case "${profile}" in
+    smoke|baseline|burst|saturation|dependency-degradation) ;;
+    *) loadtest_die "unsupported profile" ;;
+  esac
+  loadtest_is_supported_scenario "${scenario}" || loadtest_die "unsupported scenario"
+  case "${degradation_mode}" in
+    none|identity-unavailable|identity-delayed|constrained-pool|replica-restart) ;;
+    *) loadtest_die "unsupported degradation mode" ;;
+  esac
+
+  loadtest_validate_replica_count IDENTITY_REPLICAS "${identity_replicas}"
+  loadtest_validate_replica_count ORGANIZATION_REPLICAS "${organization_replicas}"
+
+  if [[ "${profile}" != "dependency-degradation" ]]; then
+    [[ "${degradation_mode}" == "none" ]] || loadtest_die "non-degradation profiles require degradation_mode=none"
+    return 0
+  fi
+
+  [[ "${degradation_mode}" != "none" ]] || loadtest_die "dependency-degradation requires an explicit degradation mode"
+
+  case "${degradation_mode}" in
+    identity-unavailable|identity-delayed)
+      [[ "${scenario}" == "organization_dependency" ]] || loadtest_die "identity dependency degradation requires scenario=organization_dependency"
+      ;;
+    replica-restart)
+      local target_service target_replicas
+      target_service="$(loadtest_target_service_for_scenario "${scenario}")"
+      if [[ "${target_service}" == "identity-service" ]]; then
+        target_replicas="${identity_replicas}"
+      else
+        target_replicas="${organization_replicas}"
+      fi
+      (( target_replicas >= 2 )) || loadtest_die "replica-restart requires at least two target service replicas"
+      ;;
+    constrained-pool) ;;
+  esac
+}
+
 loadtest_set_env() {
   local file="$1" key="$2" value="$3"
   python3 - "$file" "$key" "$value" <<'PY'
@@ -62,6 +128,10 @@ loadtest_compose() {
 loadtest_cleanup() {
   local exit_code="${1:-0}"
   set +e
+  if [[ -n "${LOADTEST_DISRUPTION_PID:-}" ]]; then
+    kill "${LOADTEST_DISRUPTION_PID}" >/dev/null 2>&1 || true
+    wait "${LOADTEST_DISRUPTION_PID}" >/dev/null 2>&1 || true
+  fi
   if [[ -n "${LOADTEST_K6_CONTAINER:-}" ]]; then
     docker rm --force "${LOADTEST_K6_CONTAINER}" >/dev/null 2>&1 || true
   fi
@@ -78,29 +148,62 @@ loadtest_cleanup() {
   return "${exit_code}"
 }
 
-loadtest_wait_service_healthy() {
+loadtest_service_container_ids() {
   local service="$1"
-  local deadline=$((SECONDS + 120))
+  loadtest_compose ps -q "${service}" | sed '/^[[:space:]]*$/d' | sort -u
+}
+
+loadtest_container_replica_key() {
+  local id="$1" key
+  key="$(printf '%s' "${id}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-f0-9' | cut -c1-12)"
+  [[ "${key}" =~ ^[a-f0-9]{12}$ ]] || loadtest_die "container identity cannot be converted to a bounded replica key"
+  printf '%s\n' "${key}"
+}
+
+loadtest_expected_replicas_for_service() {
+  case "$1" in
+    identity-service) printf '%s\n' "${LOADTEST_IDENTITY_REPLICAS}" ;;
+    organization-service) printf '%s\n' "${LOADTEST_ORGANIZATION_REPLICAS}" ;;
+    *) loadtest_die "unsupported service for replica accounting" ;;
+  esac
+}
+
+loadtest_container_status() {
+  docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || true
+}
+
+loadtest_wait_container_healthy() {
+  local id="$1" deadline=$((SECONDS + 120)) status
   while (( SECONDS < deadline )); do
-    local ids status all_healthy=true
-    ids="$(loadtest_compose ps -q "${service}")"
-    if [[ -n "${ids}" ]]; then
-      while IFS= read -r id; do
-        [[ -n "${id}" ]] || continue
-        status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${id}" 2>/dev/null || true)"
+    status="$(loadtest_container_status "${id}")"
+    if [[ "${status}" == "healthy" || "${status}" == "running" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  loadtest_die "restarted container did not become healthy"
+}
+
+loadtest_wait_service_healthy() {
+  local service="$1" expected deadline=$((SECONDS + 120))
+  expected="$(loadtest_expected_replicas_for_service "${service}")"
+  while (( SECONDS < deadline )); do
+    local ids=() all_healthy=true status
+    mapfile -t ids < <(loadtest_service_container_ids "${service}")
+    if (( ${#ids[@]} == expected )); then
+      for id in "${ids[@]}"; do
+        status="$(loadtest_container_status "${id}")"
         if [[ "${status}" != "healthy" && "${status}" != "running" ]]; then
           all_healthy=false
           break
         fi
-      done <<< "${ids}"
-      if [[ "${all_healthy}" == "true" ]]; then
-        return 0
-      fi
+      done
+      [[ "${all_healthy}" == "true" ]] && return 0
     fi
     sleep 2
   done
   loadtest_compose ps >&2 || true
-  loadtest_die "service did not become healthy: ${service}"
+  loadtest_die "service did not restore expected healthy replica count"
 }
 
 loadtest_wait_gateway() {
@@ -114,28 +217,23 @@ loadtest_wait_gateway() {
   loadtest_die "APISIX did not become ready"
 }
 
+loadtest_initialize_disruption_metadata() {
+  printf '{"mode":"%s"}\n' "${LOADTEST_DEGRADATION_MODE}" > "${LOADTEST_DISRUPTION_METADATA}"
+}
+
 loadtest_initialize() {
-  local profile="$1"
-  local degradation_mode="${2:-none}"
+  local profile="$1" scenario="$2" degradation_mode="${3:-none}"
+  local identity_replicas="${IDENTITY_REPLICAS:-1}"
+  local organization_replicas="${ORGANIZATION_REPLICAS:-1}"
+
+  loadtest_validate_configuration \
+    "${profile}" "${scenario}" "${degradation_mode}" \
+    "${identity_replicas}" "${organization_replicas}"
+
   loadtest_require_command docker
   loadtest_require_command curl
   loadtest_require_command go
   loadtest_require_command python3
-
-  case "${profile}" in
-    smoke|baseline|burst|saturation|dependency-degradation) ;;
-    *) loadtest_die "unsupported profile: ${profile}" ;;
-  esac
-  case "${degradation_mode}" in
-    none|identity-unavailable|identity-delayed|constrained-pool|replica-restart) ;;
-    *) loadtest_die "unsupported degradation mode: ${degradation_mode}" ;;
-  esac
-  if [[ "${profile}" != "dependency-degradation" && "${degradation_mode}" != "none" ]]; then
-    loadtest_die "degradation mode requires dependency-degradation profile"
-  fi
-  if [[ "${profile}" == "dependency-degradation" && "${degradation_mode}" == "none" ]]; then
-    loadtest_die "dependency-degradation profile requires an explicit degradation mode"
-  fi
 
   export LOADTEST_PROFILE="${profile}"
   export LOADTEST_DEGRADATION_MODE="${degradation_mode}"
@@ -144,13 +242,15 @@ loadtest_initialize() {
   export LOADTEST_ENV_FILE="${LOADTEST_TEMP_ROOT}/loadtest.env"
   export LOADTEST_AUTH_DIR="${LOADTEST_TEMP_ROOT}/auth"
   export LOADTEST_FIXTURE_DIR="${LOADTEST_TEMP_ROOT}/fixtures"
+  export LOADTEST_DISRUPTION_METADATA="${LOADTEST_TEMP_ROOT}/disruption.json"
   export LOADTEST_RESULTS_ROOT="${LOADTEST_RESULTS_DIR:-${REPOSITORY_ROOT}/loadtest-results}"
-  export LOADTEST_IDENTITY_REPLICAS="${IDENTITY_REPLICAS:-1}"
-  export LOADTEST_ORGANIZATION_REPLICAS="${ORGANIZATION_REPLICAS:-1}"
+  export LOADTEST_IDENTITY_REPLICAS="${identity_replicas}"
+  export LOADTEST_ORGANIZATION_REPLICAS="${organization_replicas}"
   export LOADTEST_EXPERIMENTAL_POOL_OVERRIDE=false
   mkdir -p "${LOADTEST_AUTH_DIR}" "${LOADTEST_FIXTURE_DIR}" "${LOADTEST_RESULTS_ROOT}"
+  loadtest_initialize_disruption_metadata
   cp "${REPOSITORY_ROOT}/.env.example" "${LOADTEST_ENV_FILE}"
-  chmod 600 "${LOADTEST_ENV_FILE}"
+  chmod 600 "${LOADTEST_ENV_FILE}" "${LOADTEST_DISRUPTION_METADATA}"
 
   loadtest_set_env "${LOADTEST_ENV_FILE}" COMPOSE_PROJECT_NAME "bridgeworks-loadtest-${LOADTEST_RUN_SUFFIX}"
   loadtest_set_env "${LOADTEST_ENV_FILE}" APISIX_HTTP_PORT 0
@@ -211,10 +311,10 @@ loadtest_initialize() {
   export LOADTEST_GATEWAY_URL="http://127.0.0.1:${gateway_port}"
   loadtest_wait_gateway
 
-  local identity_id
-  identity_id="$(loadtest_compose ps -q identity-service | head -n 1)"
-  [[ -n "${identity_id}" ]] || loadtest_die "identity container is unavailable"
-  export LOADTEST_NETWORK="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "${identity_id}")"
+  local identity_ids=()
+  mapfile -t identity_ids < <(loadtest_service_container_ids identity-service)
+  (( ${#identity_ids[@]} > 0 )) || loadtest_die "identity container is unavailable"
+  export LOADTEST_NETWORK="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "${identity_ids[0]}")"
   [[ -n "${LOADTEST_NETWORK}" ]] || loadtest_die "cannot resolve private Docker network"
 
   if [[ "${degradation_mode}" == "identity-delayed" ]]; then
@@ -311,20 +411,22 @@ PY
 }
 
 loadtest_scrape_service() {
-  local phase="$1" sample="$2" service="$3" suffix="$4" output_dir="$5"
-  local index=0 id
-  while IFS= read -r id; do
-    [[ -n "${id}" ]] || continue
-    local output="${output_dir}/metrics-${phase}-${sample}-$(printf '%02d' "${index}")-${suffix}.prom"
+  local phase="$1" sample="$2" service="$3" file_service="$4" output_dir="$5"
+  local expected success=0 ids=() id replica_key output
+  expected="$(loadtest_expected_replicas_for_service "${service}")"
+  mapfile -t ids < <(loadtest_service_container_ids "${service}")
+  for id in "${ids[@]}"; do
+    replica_key="$(loadtest_container_replica_key "${id}")"
+    output="${output_dir}/metrics-${phase}-${sample}-${file_service}-${replica_key}.prom"
     if docker exec "${id}" wget --quiet --output-document=- http://127.0.0.1:9090/metrics > "${output}"; then
-      index=$((index + 1))
+      success=$((success + 1))
     else
       rm -f "${output}"
-      [[ "${phase}" == "during" ]] || loadtest_die "metrics scrape failed for ${service}"
+      [[ "${phase}" == "during" ]] || loadtest_die "metrics scrape failed for service replica"
     fi
-  done < <(loadtest_compose ps -q "${service}")
-  if (( index == 0 )) && [[ "${phase}" != "during" ]]; then
-    loadtest_die "no metrics target found for ${service}"
+  done
+  if [[ "${phase}" != "during" ]]; then
+    (( success == expected )) || loadtest_die "metrics scrape did not cover the expected replica count"
   fi
 }
 
@@ -342,7 +444,7 @@ loadtest_k6_script() {
     identity_user_unique|identity_user_retry|organization_unique|organization_retry|membership_unique|membership_retry)
       printf '%s\n' webhook.js
       ;;
-    *) loadtest_die "unsupported scenario: $1" ;;
+    *) loadtest_die "unsupported scenario" ;;
   esac
 }
 
@@ -374,11 +476,101 @@ PY
   } > "${env_file}"
 }
 
+loadtest_write_restart_metadata() {
+  local target_service="$1" target_key="$2" non_targets_csv="$3"
+  python3 - "${LOADTEST_DISRUPTION_METADATA}" "${target_service}" "${target_key}" "${non_targets_csv}" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+path = Path(sys.argv[1])
+non_targets = [value for value in sys.argv[4].split(",") if value]
+payload = {
+    "mode": "replica-restart",
+    "target_service": sys.argv[2],
+    "restarted_replica_key": sys.argv[3],
+    "non_target_replica_keys": non_targets,
+    "non_target_remained_running": True,
+    "target_healthy_after_restart": True,
+    "expected_replica_count_restored": True,
+    "traffic_active_during_restart": True,
+}
+path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+loadtest_restart_one_replica() {
+  local scenario="$1" service expected ids=() target target_key non_targets=()
+  local non_target_keys=() monitor_stop monitor_failure monitor_pid current_ids=() id key
+
+  service="$(loadtest_target_service_for_scenario "${scenario}")"
+  expected="$(loadtest_expected_replicas_for_service "${service}")"
+  (( expected >= 2 )) || loadtest_die "replica-restart requires at least two target service replicas"
+
+  mapfile -t ids < <(loadtest_service_container_ids "${service}")
+  (( ${#ids[@]} == expected )) || loadtest_die "target service replica count is not ready for restart"
+  target="${ids[0]}"
+  target_key="$(loadtest_container_replica_key "${target}")"
+  non_targets=("${ids[@]:1}")
+  for id in "${non_targets[@]}"; do
+    non_target_keys+=("$(loadtest_container_replica_key "${id}")")
+  done
+
+  monitor_stop="${LOADTEST_TEMP_ROOT}/restart-monitor.stop"
+  monitor_failure="${LOADTEST_TEMP_ROOT}/restart-monitor.failure"
+  rm -f "${monitor_stop}" "${monitor_failure}"
+  (
+    while [[ ! -f "${monitor_stop}" ]]; do
+      for id in "${non_targets[@]}"; do
+        if [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" != "true" ]]; then
+          printf 'non-target replica stopped\n' > "${monitor_failure}"
+          exit 1
+        fi
+      done
+      sleep 0.1
+    done
+  ) &
+  monitor_pid=$!
+
+  if ! docker restart "${target}" >/dev/null; then
+    touch "${monitor_stop}"
+    wait "${monitor_pid}" >/dev/null 2>&1 || true
+    loadtest_die "single target replica restart failed"
+  fi
+  if ! loadtest_wait_container_healthy "${target}"; then
+    touch "${monitor_stop}"
+    wait "${monitor_pid}" >/dev/null 2>&1 || true
+    loadtest_die "restarted target replica did not recover"
+  fi
+  if [[ "$(docker inspect --format '{{.State.Running}}' "${LOADTEST_K6_CONTAINER}" 2>/dev/null || true)" != "true" ]]; then
+    touch "${monitor_stop}"
+    wait "${monitor_pid}" >/dev/null 2>&1 || true
+    loadtest_die "traffic generator stopped before the single-replica restart completed"
+  fi
+  touch "${monitor_stop}"
+  wait "${monitor_pid}" >/dev/null 2>&1 || true
+  [[ ! -s "${monitor_failure}" ]] || loadtest_die "a non-target replica stopped during restart"
+
+  mapfile -t current_ids < <(loadtest_service_container_ids "${service}")
+  (( ${#current_ids[@]} == expected )) || loadtest_die "expected target service replica count was not restored"
+  printf '%s\n' "${current_ids[@]}" | grep --fixed-strings --line-regexp --quiet "${target}" \
+    || loadtest_die "restarted container identity changed unexpectedly"
+  for id in "${non_targets[@]}"; do
+    printf '%s\n' "${current_ids[@]}" | grep --fixed-strings --line-regexp --quiet "${id}" \
+      || loadtest_die "non-target replica identity changed during restart"
+    [[ "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" == "true" ]] \
+      || loadtest_die "non-target replica is not running after restart"
+  done
+
+  local non_targets_csv
+  non_targets_csv="$(IFS=,; printf '%s' "${non_target_keys[*]}")"
+  loadtest_write_restart_metadata "${service}" "${target_key}" "${non_targets_csv}"
+}
+
 loadtest_start_disruption() {
   local scenario="$1"
   case "${LOADTEST_DEGRADATION_MODE}" in
     identity-unavailable|identity-delayed)
-      [[ "${scenario}" == "organization_dependency" ]] || loadtest_die "${LOADTEST_DEGRADATION_MODE} requires organization_dependency scenario"
       if [[ "${LOADTEST_DEGRADATION_MODE}" == "identity-delayed" ]]; then
         LOADTEST_DISRUPTION_PID=''
         return 0
@@ -395,13 +587,7 @@ loadtest_start_disruption() {
     replica-restart)
       (
         sleep "${DISRUPTION_DELAY_SECONDS:-8}"
-        if [[ "${scenario}" == identity_* ]]; then
-          loadtest_compose restart identity-service >/dev/null
-          loadtest_wait_service_healthy identity-service
-        else
-          loadtest_compose restart organization-service >/dev/null
-          loadtest_wait_service_healthy organization-service
-        fi
+        loadtest_restart_one_replica "${scenario}"
       ) &
       LOADTEST_DISRUPTION_PID=$!
       ;;
@@ -413,6 +599,10 @@ loadtest_start_disruption() {
 
 loadtest_run_scenario() {
   local scenario="$1"
+  loadtest_validate_configuration \
+    "${LOADTEST_PROFILE}" "${scenario}" "${LOADTEST_DEGRADATION_MODE}" \
+    "${LOADTEST_IDENTITY_REPLICAS}" "${LOADTEST_ORGANIZATION_REPLICAS}"
+
   local script result_dir metrics_dir k6_env sample=0 k6_exit=0
   script="$(loadtest_k6_script "${scenario}")"
   result_dir="${LOADTEST_RESULTS_ROOT}/${LOADTEST_PROFILE}/${scenario}"
@@ -447,6 +637,7 @@ loadtest_run_scenario() {
   docker logs "${LOADTEST_K6_CONTAINER}" > "${LOADTEST_TEMP_ROOT}/k6-${scenario}.log" 2>&1 || true
   if [[ -n "${LOADTEST_DISRUPTION_PID:-}" ]]; then
     wait "${LOADTEST_DISRUPTION_PID}" || loadtest_die "degradation disruption failed"
+    LOADTEST_DISRUPTION_PID=''
   fi
   loadtest_scrape after 0000 "${metrics_dir}"
 
@@ -464,6 +655,7 @@ loadtest_run_scenario() {
     --identity-min-conns "$(loadtest_read_env_value DATABASE_MIN_CONNS)"
     --organization-max-conns "$(loadtest_read_env_value ORGANIZATION_DATABASE_MAX_CONNS)"
     --organization-min-conns "$(loadtest_read_env_value ORGANIZATION_DATABASE_MIN_CONNS)"
+    --disruption-metadata "${LOADTEST_DISRUPTION_METADATA}"
     --limitation "GitHub-hosted and local Docker measurements validate the harness and enable relative comparisons; they are not production capacity claims."
     --limitation "Shared runner CPU, storage, and network scheduling can vary between runs."
     --limitation "Production pool sizing remains pending representative deployment measurements."
@@ -471,13 +663,13 @@ loadtest_run_scenario() {
   if [[ "${LOADTEST_EXPERIMENTAL_POOL_OVERRIDE}" == "true" ]]; then
     report_args+=(--experimental-pool-override)
   fi
-  [[ -f "${result_dir}/k6-summary.json" ]] || loadtest_die "k6 did not produce a summary for ${scenario}"
+  [[ -f "${result_dir}/k6-summary.json" ]] || loadtest_die "k6 did not produce a summary"
   python3 "${LOADTEST_ROOT}/report.py" "${report_args[@]}"
 
   rm -rf "${metrics_dir}" "${result_dir}/k6-summary.json"
   docker rm --force "${LOADTEST_K6_CONTAINER}" >/dev/null 2>&1 || true
   LOADTEST_K6_CONTAINER=''
-  [[ "${k6_exit}" == "0" ]] || loadtest_die "k6 thresholds failed for ${scenario}"
+  [[ "${k6_exit}" == "0" ]] || loadtest_die "k6 thresholds failed"
 }
 
 loadtest_write_capacity_example() {
