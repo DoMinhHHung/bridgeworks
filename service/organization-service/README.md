@@ -192,6 +192,10 @@ go tool cover -func=coverage.out
 
 The CI integration suite runs signed Clerk webhook synchronization, transactional conflict/concurrency regressions, real PostgreSQL constraint behavior, current-organization authorization, CORS/cache/security contracts, dependency outage/recovery, migration idempotency, and private-port isolation.
 
+## Explicit non-goals
+
+This vertical slice does not add Redis, cache implementation, OpenTelemetry, Prometheus, `pg_cron`, a retention goroutine, an APISIX rate-limit plugin, organization verification, RabbitMQ, an outbox, an audit framework, additional application roles, role mutation APIs, or new public endpoints.
+
 ## Production operations
 
 Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
