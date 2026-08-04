@@ -128,7 +128,7 @@ test "$(identity_sql "select status from app.app_users where clerk_user_id='user
 
 # Membership-first creates a pending organization and an active admin membership.
 cat > "${work}/membership-first.json" <<'JSON'
-{"type":"organization_membership.created","timestamp":1785744010000,"data":{"id":"mem_org_ci_admin","organization":{"id":"org_ci_primary"},"public_user_data":{"user_id":"user_org_ci_admin","identifier":"must-not-persist@example.test"},"role":"org:admin"}}
+{"type":"organizationMembership.created","timestamp":1785744010000,"data":{"id":"mem_org_ci_admin","organization":{"id":"org_ci_primary"},"public_user_data":{"user_id":"user_org_ci_admin","identifier":"must-not-persist@example.test"},"role":"org:admin"}}
 JSON
 test "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_membership_first "${work}/membership-first.json" "${work}/membership-first-response" membership-first-ci)" = "204|membership-first-ci"
 test "$(organization_sql "select status from organization.organizations where clerk_organization_id='org_ci_primary'")" = "pending"
