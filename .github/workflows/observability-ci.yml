@@ -61,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose config --quiet
+          test ! -e .github/workflows/observability-docs-correction.yml
           grep --quiet 'METRICS_ADDR' compose.yaml
           grep --quiet 'ORGANIZATION_METRICS_ADDR' compose.yaml
           grep --quiet 'expose: \["8080", "9090"\]' compose.yaml
