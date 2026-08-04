@@ -69,7 +69,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -R "feat/organization-sync-authorization" .github/workflows
+          branch='feat/organization-sync''-authorization'
+          ! grep -R "${branch}" .github/workflows
 
   organization-integration:
     name: Organization PostgreSQL, Clerk sync, Identity dependency, and authorization integration
