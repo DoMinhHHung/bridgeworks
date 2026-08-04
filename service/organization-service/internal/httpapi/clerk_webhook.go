@@ -30,6 +30,16 @@ type eventOutcomeProcessor interface {
 func ClerkWebhook(
 	verifier WebhookVerifier,
 	processor EventProcessor,
+	logger *slog.Logger,
+	maxBodyBytes int64,
+	processTimeout time.Duration,
+) http.HandlerFunc {
+	return ClerkWebhookWithMetrics(verifier, processor, nil, logger, maxBodyBytes, processTimeout)
+}
+
+func ClerkWebhookWithMetrics(
+	verifier WebhookVerifier,
+	processor EventProcessor,
 	metrics Metrics,
 	logger *slog.Logger,
 	maxBodyBytes int64,
@@ -55,9 +65,7 @@ func ClerkWebhook(
 		if err != nil {
 			metricsObserveWebhook(metrics, rejectedAggregate(body), observability.OutcomeRejected)
 			logger.WarnContext(r.Context(), "organization webhook rejected",
-				"request_id", RequestIDFromContext(r.Context()),
-				"reason", "verification_failed",
-			)
+				"request_id", RequestIDFromContext(r.Context()), "reason", "verification_failed")
 			writeError(w, r, http.StatusBadRequest, "invalid_webhook", "invalid webhook request")
 			return
 		}
@@ -78,9 +86,7 @@ func ClerkWebhook(
 		if err != nil {
 			metricsObserveWebhook(metrics, aggregate, observability.OutcomeRetryableFailure)
 			logger.ErrorContext(r.Context(), "organization webhook processing failed",
-				"request_id", RequestIDFromContext(r.Context()),
-				"event_category", event.AggregateType,
-			)
+				"request_id", RequestIDFromContext(r.Context()), "event_category", event.AggregateType)
 			writeError(w, r, http.StatusServiceUnavailable, "service_unavailable", "service temporarily unavailable")
 			return
 		}
