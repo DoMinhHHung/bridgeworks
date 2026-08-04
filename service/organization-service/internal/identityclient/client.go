@@ -80,7 +80,9 @@ func (c *Client) Resolve(ctx context.Context, authorizationHeader, requestID str
 	if err != nil {
 		return currentorganization.Identity{}, safeerr.Wrap("call identity service", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return currentorganization.Identity{}, safeerr.Wrap("read identity response", err)
