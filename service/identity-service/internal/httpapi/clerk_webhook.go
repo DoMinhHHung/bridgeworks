@@ -57,7 +57,9 @@ func clerkWebhookHandlerWithMetrics(
 	return clerkWebhookHandlerCore(
 		logger,
 		verifier,
-		processor.ProcessWithResult,
+		func(ctx context.Context, event clerkwebhook.Event) (usersync.Result, error) {
+			return processor.ProcessWithResult(ctx, event)
+		},
 		metrics,
 		maxBodyBytes,
 		processTimeout,
