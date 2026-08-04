@@ -60,6 +60,18 @@ jobs:
             service/identity-service/migrations/000001_create_app_users.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
 
+      - name: Verify Organization application boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R "ProcessEvent" service/organization-service/internal
+          ! grep -R "repository.ProcessEvent" service/organization-service/internal
+          ! grep -R "organizationid.Generator" service/organization-service/internal/store
+          grep --quiet "SAVEPOINT membership_insert" service/organization-service/internal/store/repository.go
+          grep --quiet "ROLLBACK TO SAVEPOINT membership_insert" service/organization-service/internal/store/repository.go
+          grep --quiet "memberships_clerk_membership_id_uq" service/organization-service/internal/organizationsync/unit_of_work.go
+          grep --quiet "memberships_active_organization_user_uq" service/organization-service/internal/organizationsync/unit_of_work.go
+
       - name: Validate Organization Go module
         shell: bash
         run: |
@@ -168,6 +180,28 @@ jobs:
       - name: Verify Organization synchronization and authorization
         shell: bash
         run: bash .github/scripts/verify-organization-integration.sh
+
+      - name: Verify membership conflict and concurrency regressions
+        shell: bash
+        run: bash .github/scripts/verify-organization-conflicts.sh
+
+      - name: Verify unrelated PostgreSQL unique violation
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          organization_service_id="$(docker compose ps -q organization-service)"
+          network="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${organization_service_id}" | head -n 1)"
+          test -n "${network}"
+          docker run --rm \
+            --network "${network}" \
+            --volume "${PWD}:/src" \
+            --workdir /src/service/organization-service \
+            --env "ORGANIZATION_TEST_DATABASE_URL=${ORGANIZATION_DATABASE_URL}" \
+            golang:1.26.5-bookworm \
+            go test -race -run '^TestPostgresUnrelatedUniqueViolationRollsBackInbox$' ./internal/organizationsync
 
       - name: Verify private port isolation
         shell: bash
