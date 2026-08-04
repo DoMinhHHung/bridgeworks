@@ -8,24 +8,48 @@ import (
 	"github.com/google/uuid"
 )
 
+type unitOfWorkTestFactory struct{ uow UnitOfWork }
+
+func (f unitOfWorkTestFactory) Begin(context.Context) (UnitOfWork, error) { return f.uow, nil }
+
+type stagedMembershipUnitOfWork struct {
+	*fakeUnitOfWork
+	after      Membership
+	afterFound bool
+	reads      int
+}
+
+func (u *stagedMembershipUnitOfWork) GetMembership(context.Context, string) (Membership, bool, error) {
+	u.sequence = append(u.sequence, "get_membership")
+	u.getMembershipCalls++
+	u.reads++
+	if u.reads == 1 {
+		return Membership{}, false, nil
+	}
+	return u.after, u.afterFound, nil
+}
+
 func TestServiceClerkMembershipConstraintEquivalentActiveProjection(t *testing.T) {
-	uow := newFakeUnitOfWork()
-	uow.organizationFound = true
-	uow.organization = Organization{ID: testOrganizationID, Status: "active"}
-	uow.insertMembershipErr = &UniqueConstraintError{
+	base := newFakeUnitOfWork()
+	base.organizationFound = true
+	base.organization = Organization{ID: testOrganizationID, Status: "active"}
+	base.insertMembershipErr = &UniqueConstraintError{
 		Constraint: ConstraintMembershipClerkID,
 		Cause:      errors.New("duplicate key"),
 	}
-	uow.membershipFound = true
-	uow.membership = Membership{
-		ID:                testMembershipID,
-		ClerkMembershipID: "mem-1",
-		OrganizationID:    testOrganizationID,
-		ClerkUserID:       "user-1",
-		ApplicationRole:   RoleAdmin,
-		Status:            "active",
+	uow := &stagedMembershipUnitOfWork{
+		fakeUnitOfWork: base,
+		afterFound:    true,
+		after: Membership{
+			ID:                testMembershipID,
+			ClerkMembershipID: "mem-1",
+			OrganizationID:    testOrganizationID,
+			ClerkUserID:       "user-1",
+			ApplicationRole:   RoleAdmin,
+			Status:            "active",
+		},
 	}
-	service := New(fakeFactory{uow: uow}, &fakeGenerator{ids: []uuid.UUID{testSecondID}})
+	service := New(unitOfWorkTestFactory{uow: uow}, &fakeGenerator{ids: []uuid.UUID{testSecondID}})
 
 	if err := service.Process(context.Background(), membershipEvent(EventMembershipCreated, nil)); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -40,23 +64,26 @@ func TestServiceClerkMembershipConstraintEquivalentActiveProjection(t *testing.T
 }
 
 func TestServiceClerkMembershipConstraintDeletedProjectionNeverReactivates(t *testing.T) {
-	uow := newFakeUnitOfWork()
-	uow.organizationFound = true
-	uow.organization = Organization{ID: testOrganizationID, Status: "active"}
-	uow.insertMembershipErr = &UniqueConstraintError{
+	base := newFakeUnitOfWork()
+	base.organizationFound = true
+	base.organization = Organization{ID: testOrganizationID, Status: "active"}
+	base.insertMembershipErr = &UniqueConstraintError{
 		Constraint: ConstraintMembershipClerkID,
 		Cause:      errors.New("duplicate key"),
 	}
-	uow.membershipFound = true
-	uow.membership = Membership{
-		ID:                testMembershipID,
-		ClerkMembershipID: "mem-1",
-		OrganizationID:    testOrganizationID,
-		ClerkUserID:       "user-1",
-		ApplicationRole:   RoleViewer,
-		Status:            "deleted",
+	uow := &stagedMembershipUnitOfWork{
+		fakeUnitOfWork: base,
+		afterFound:    true,
+		after: Membership{
+			ID:                testMembershipID,
+			ClerkMembershipID: "mem-1",
+			OrganizationID:    testOrganizationID,
+			ClerkUserID:       "user-1",
+			ApplicationRole:   RoleViewer,
+			Status:            "deleted",
+		},
 	}
-	service := New(fakeFactory{uow: uow}, &fakeGenerator{ids: []uuid.UUID{testSecondID}})
+	service := New(unitOfWorkTestFactory{uow: uow}, &fakeGenerator{ids: []uuid.UUID{testSecondID}})
 
 	if err := service.Process(context.Background(), membershipEvent(EventMembershipCreated, nil)); err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -70,23 +97,26 @@ func TestServiceClerkMembershipConstraintDeletedProjectionNeverReactivates(t *te
 }
 
 func TestServiceClerkMembershipConstraintInconsistentProjectionRollsBack(t *testing.T) {
-	uow := newFakeUnitOfWork()
-	uow.organizationFound = true
-	uow.organization = Organization{ID: testOrganizationID, Status: "active"}
-	uow.insertMembershipErr = &UniqueConstraintError{
+	base := newFakeUnitOfWork()
+	base.organizationFound = true
+	base.organization = Organization{ID: testOrganizationID, Status: "active"}
+	base.insertMembershipErr = &UniqueConstraintError{
 		Constraint: ConstraintMembershipClerkID,
 		Cause:      errors.New("duplicate key"),
 	}
-	uow.membershipFound = true
-	uow.membership = Membership{
-		ID:                testMembershipID,
-		ClerkMembershipID: "mem-1",
-		OrganizationID:    testOrganizationID,
-		ClerkUserID:       "different-user",
-		ApplicationRole:   RoleViewer,
-		Status:            "active",
+	uow := &stagedMembershipUnitOfWork{
+		fakeUnitOfWork: base,
+		afterFound:    true,
+		after: Membership{
+			ID:                testMembershipID,
+			ClerkMembershipID: "mem-1",
+			OrganizationID:    testOrganizationID,
+			ClerkUserID:       "different-user",
+			ApplicationRole:   RoleViewer,
+			Status:            "active",
+		},
 	}
-	service := New(fakeFactory{uow: uow}, &fakeGenerator{ids: []uuid.UUID{testSecondID}})
+	service := New(unitOfWorkTestFactory{uow: uow}, &fakeGenerator{ids: []uuid.UUID{testSecondID}})
 
 	if err := service.Process(context.Background(), membershipEvent(EventMembershipCreated, nil)); err == nil {
 		t.Fatal("Process() error = nil")
