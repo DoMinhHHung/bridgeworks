@@ -18,14 +18,12 @@ import (
 	"time"
 )
 
-const (
-	testIssuer         = "https://clerk.bridgeworks.test"
-	testAuthorizedParty = "http://localhost:3000"
-	testUserID         = "user_test_123"
-	testSessionID      = "sess_test_123"
-	testOrganizationID = "org_test_123"
-	testRequestID      = "request-test-123"
-)
+const testIssuer = "https://clerk.bridgeworks.test"
+const testAuthorizedParty = "http://localhost:3000"
+const testUserID = "user_test_123"
+const testSessionID = "sess_test_123"
+const testOrganizationID = "org_test_123"
+const testRequestID = "request-test-123"
 
 func newTestMiddleware(t *testing.T, key *rsa.PrivateKey) (func(http.Handler) http.Handler, *bytes.Buffer) {
 	t.Helper()
