@@ -11,6 +11,7 @@ import (
 type Dependencies struct {
 	ServiceName      string
 	Logger           *slog.Logger
+	Metrics          Metrics
 	Readiness        ReadinessChecker
 	ReadinessTimeout time.Duration
 	WebhookVerifier  WebhookVerifier
@@ -24,6 +25,7 @@ type Dependencies struct {
 func NewRouter(dependencies Dependencies) http.Handler {
 	router := chi.NewRouter()
 	router.Use(RequestID)
+	router.Use(HTTPObservability(dependencies.Logger, dependencies.Metrics))
 	router.Use(Recoverer(dependencies.Logger))
 
 	router.Get("/health/live", Liveness(dependencies.ServiceName))
@@ -31,6 +33,7 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Post("/webhooks/clerk", ClerkWebhook(
 		dependencies.WebhookVerifier,
 		dependencies.WebhookProcessor,
+		dependencies.Metrics,
 		dependencies.Logger,
 		dependencies.WebhookMaxBytes,
 		dependencies.WebhookTimeout,
