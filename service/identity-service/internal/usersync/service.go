@@ -15,6 +15,14 @@ const (
 	rollbackTimeout   = 2 * time.Second
 )
 
+type Result string
+
+const (
+	ResultProcessed Result = "processed"
+	ResultDuplicate Result = "duplicate"
+	ResultStale     Result = "stale"
+)
+
 var ErrIDUserCollisionExhausted = errors.New("unable to generate a unique id_user")
 
 type User struct {
@@ -67,63 +75,77 @@ func New(repository Repository, uuidGenerator UUIDGenerator, idUserGenerator IDU
 }
 
 func (s *Service) Process(ctx context.Context, event clerkwebhook.Event) error {
+	_, err := s.ProcessWithResult(ctx, event)
+	return err
+}
+
+func (s *Service) ProcessWithResult(ctx context.Context, event clerkwebhook.Event) (Result, error) {
 	if s == nil || s.repository == nil || s.uuidGenerator == nil || s.idUserGenerator == nil {
-		return errors.New("user synchronization service is not initialized")
+		return "", errors.New("user synchronization service is not initialized")
 	}
 
 	transaction, err := s.repository.Begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer rollback(transaction, ctx)
 
 	inserted, err := transaction.InsertInboxEvent(ctx, event)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !inserted {
-		return transaction.Commit(ctx)
+		if err := transaction.Commit(ctx); err != nil {
+			return "", err
+		}
+		return ResultDuplicate, nil
 	}
 
 	if err := transaction.LockClerkUser(ctx, event.ClerkUserID); err != nil {
-		return err
+		return "", err
 	}
 
 	stale, err := transaction.HasSupersedingEvent(ctx, event)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if stale {
-		return transaction.Commit(ctx)
+		if err := transaction.Commit(ctx); err != nil {
+			return "", err
+		}
+		return ResultStale, nil
 	}
 
 	_, exists, err := transaction.GetUserByClerkID(ctx, event.ClerkUserID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	switch event.Type {
 	case clerkwebhook.EventUserCreated, clerkwebhook.EventUserUpdated:
 		if exists {
 			if err := transaction.UpdatePrimaryEmail(ctx, event.ClerkUserID, event.PrimaryEmail); err != nil {
-				return err
+				return "", err
 			}
 		} else if err := s.insertUser(ctx, transaction, event, "active", event.PrimaryEmail); err != nil {
-			return err
+			return "", err
 		}
 	case clerkwebhook.EventUserDeleted:
 		if exists {
 			if err := transaction.MarkDeleted(ctx, event.ClerkUserID); err != nil {
-				return err
+				return "", err
 			}
 		} else if err := s.insertUser(ctx, transaction, event, "deleted", nil); err != nil {
-			return err
+			return "", err
 		}
 	default:
-		return fmt.Errorf("unsupported synchronized event type %q", event.Type)
+		return "", fmt.Errorf("unsupported synchronized event type %q", event.Type)
 	}
 
-	return transaction.Commit(ctx)
+	if err := transaction.Commit(ctx); err != nil {
+		return "", err
+	}
+	return ResultProcessed, nil
 }
 
 func (s *Service) insertUser(

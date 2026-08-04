@@ -101,6 +101,13 @@ func (db *DB) Begin(ctx context.Context) (pgx.Tx, error) {
 	return tx, nil
 }
 
+func (db *DB) Stat() *pgxpool.Stat {
+	if db == nil || db.pool == nil {
+		return nil
+	}
+	return db.pool.Stat()
+}
+
 func (db *DB) Close() {
 	if db == nil || db.pool == nil {
 		return

@@ -14,6 +14,7 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authn"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authorization"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/currentorganization"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/observability"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationsync"
 	"github.com/google/uuid"
 )
@@ -29,14 +30,30 @@ func (f fakeWebhookVerifier) VerifyAndParse([]byte, http.Header) (organizationsy
 }
 
 type fakeEventProcessor struct {
-	calls int
-	err   error
+	calls  int
+	result organizationsync.Result
+	err    error
 }
 
-func (f *fakeEventProcessor) Process(context.Context, organizationsync.Event) error {
-	f.calls++
-	return f.err
+func (f *fakeEventProcessor) Process(ctx context.Context, event organizationsync.Event) error {
+	_, err := f.process(ctx, event)
+	return err
 }
+
+func (f *fakeEventProcessor) ProcessWithResult(ctx context.Context, event organizationsync.Event) (organizationsync.Result, error) {
+	return f.process(ctx, event)
+}
+
+func (f *fakeEventProcessor) process(context.Context, organizationsync.Event) (organizationsync.Result, error) {
+	f.calls++
+	if f.result == "" {
+		f.result = organizationsync.ResultProcessed
+	}
+	return f.result, f.err
+}
+
+var _ EventProcessor = (*fakeEventProcessor)(nil)
+var _ EventOutcomeProcessor = (*fakeEventProcessor)(nil)
 
 type fakeCurrentResolver struct {
 	result currentorganization.Result
@@ -86,6 +103,33 @@ func TestClerkWebhookResponses(t *testing.T) {
 				t.Fatalf("processor calls = %d, want %d", tt.processor.calls, tt.wantCalls)
 			}
 		})
+	}
+}
+
+func TestClerkWebhookWithMetricsUsesApplicationOutcome(t *testing.T) {
+	processor := &fakeEventProcessor{result: organizationsync.ResultStale}
+	metrics := &fakeMetrics{}
+	handler := RequestID(ClerkWebhookWithMetrics(
+		fakeWebhookVerifier{
+			event:     organizationsync.Event{AggregateType: organizationsync.AggregateMembership},
+			supported: true,
+		},
+		processor,
+		metrics,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		16,
+		time.Second,
+	))
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/clerk", strings.NewReader("{}"))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if len(metrics.webhooks) != 1 || metrics.webhooks[0] != [2]string{observability.AggregateMembership, observability.OutcomeStale} {
+		t.Fatalf("webhook metrics = %#v", metrics.webhooks)
 	}
 }
 

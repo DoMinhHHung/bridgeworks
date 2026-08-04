@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,11 +18,24 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/currentuser"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/httpapi"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/identityid"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/observability"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/postgres"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/store"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
 )
+
+type serveResult struct {
+	name string
+	err  error
+}
+
+type shutdownServer interface {
+	Shutdown(context.Context) error
+	Close() error
+}
+
+var _ httpapi.ClerkWebhookOutcomeProcessor = (*usersync.Service)(nil)
 
 func main() {
 	bootstrapLogger := platform.NewLogger(os.Stdout, slog.LevelInfo)
@@ -33,6 +47,10 @@ func main() {
 
 func run(bootstrapLogger *slog.Logger) error {
 	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	metricsAddr, err := config.LoadMetricsAddr(cfg.HTTPAddr)
 	if err != nil {
 		return err
 	}
@@ -54,7 +72,19 @@ func run(bootstrapLogger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	cleanupDatabase := true
+	defer func() {
+		if cleanupDatabase {
+			database.Close()
+		}
+	}()
+
+	metrics, err := observability.New(cfg.ServiceName, func() observability.PoolStat {
+		return database.Stat()
+	})
+	if err != nil {
+		return err
+	}
 
 	verifier, err := clerkwebhook.NewVerifier(cfg.ClerkWebhookSigningSecret)
 	if err != nil {
@@ -94,6 +124,7 @@ func run(bootstrapLogger *slog.Logger) error {
 				ReadinessTimeout:           cfg.DatabaseReadinessTimeout,
 				ClerkWebhookProcessTimeout: cfg.ClerkWebhookProcessTimeout,
 				ClerkWebhookMaxBodyBytes:   cfg.ClerkWebhookMaxBodyBytes,
+				Metrics:                    metrics,
 			},
 			logger,
 			database,
@@ -108,38 +139,88 @@ func run(bootstrapLogger *slog.Logger) error {
 		IdleTimeout:       cfg.IdleTimeout,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
+	metricsServer := &http.Server{
+		Addr:              metricsAddr,
+		Handler:           metrics.Handler(),
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+	}
 
-	serveErrors := make(chan error, 1)
-	go func() {
-		logger.Info("http server starting", "address", cfg.HTTPAddr)
-		serveErrors <- server.ListenAndServe()
-	}()
+	applicationListener, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("listen application HTTP: %w", err)
+	}
+	defer func() { _ = applicationListener.Close() }()
+	metricsListener, err := net.Listen("tcp", metricsAddr)
+	if err != nil {
+		return fmt.Errorf("listen private metrics HTTP: %w", err)
+	}
+	defer func() { _ = metricsListener.Close() }()
 
+	serveErrors := make(chan serveResult, 2)
+	go serve("application", server, applicationListener, logger, serveErrors)
+	go serve("metrics", metricsServer, metricsListener, logger, serveErrors)
+
+	var serveErr error
 	select {
-	case serveErr := <-serveErrors:
-		if errors.Is(serveErr, http.ErrServerClosed) {
-			return nil
+	case result := <-serveErrors:
+		if result.err != nil && !errors.Is(result.err, http.ErrServerClosed) {
+			serveErr = fmt.Errorf("serve %s HTTP: %w", result.name, result.err)
+		} else {
+			serveErr = fmt.Errorf("%s HTTP server stopped unexpectedly", result.name)
 		}
-		return fmt.Errorf("serve HTTP: %w", serveErr)
 	case <-signalContext.Done():
 		logger.Info("shutdown signal received")
 	}
 
 	shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	if err := server.Shutdown(shutdownContext); err != nil {
-		_ = server.Close()
-		return fmt.Errorf("shutdown HTTP server: %w", err)
+	shutdownErr := shutdownRuntime(shutdownContext, metricsServer, server, database.Close)
+	cleanupDatabase = false
+	if serveErr != nil {
+		return serveErr
 	}
-
-	select {
-	case serveErr := <-serveErrors:
-		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			return fmt.Errorf("serve HTTP during shutdown: %w", serveErr)
-		}
-	case <-time.After(cfg.ShutdownTimeout):
-		return errors.New("http server did not stop before shutdown timeout")
+	if shutdownErr != nil {
+		return shutdownErr
 	}
-	logger.Info("http server stopped")
+	logger.Info("http servers stopped")
 	return nil
+}
+
+func shutdownRuntime(
+	ctx context.Context,
+	metricsServer shutdownServer,
+	applicationServer shutdownServer,
+	closeDatabase func(),
+) error {
+	var result error
+	if err := shutdownHTTPServer(ctx, "metrics", metricsServer); err != nil {
+		result = err
+	}
+	if err := shutdownHTTPServer(ctx, "application", applicationServer); err != nil && result == nil {
+		result = err
+	}
+	if closeDatabase != nil {
+		closeDatabase()
+	}
+	return result
+}
+
+func shutdownHTTPServer(ctx context.Context, name string, server shutdownServer) error {
+	if server == nil {
+		return nil
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		_ = server.Close()
+		return fmt.Errorf("shutdown %s HTTP server: %w", name, err)
+	}
+	return nil
+}
+
+func serve(name string, server *http.Server, listener net.Listener, logger *slog.Logger, results chan<- serveResult) {
+	logger.Info("http server starting", "listener", name, "address", listener.Addr().String())
+	results <- serveResult{name: name, err: server.Serve(listener)}
 }
