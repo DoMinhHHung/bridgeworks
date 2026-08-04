@@ -12,9 +12,9 @@ const (
 	EventOrganizationCreated = "organization.created"
 	EventOrganizationUpdated = "organization.updated"
 	EventOrganizationDeleted = "organization.deleted"
-	EventMembershipCreated   = "organization_membership.created"
-	EventMembershipUpdated   = "organization_membership.updated"
-	EventMembershipDeleted   = "organization_membership.deleted"
+	EventMembershipCreated   = "organizationMembership.created"
+	EventMembershipUpdated   = "organizationMembership.updated"
+	EventMembershipDeleted   = "organizationMembership.deleted"
 
 	AggregateOrganization = "organization"
 	AggregateMembership   = "membership"
@@ -96,7 +96,7 @@ func Decode(eventID string, payload []byte) (Event, bool, error) {
 		return Event{}, true, ErrInvalidEvent
 	}
 	event := Event{EventID: eventID, Type: raw.Type, OccurredAt: occurredAt}
-	if strings.HasPrefix(raw.Type, "organization_membership.") {
+	if strings.HasPrefix(raw.Type, "organizationMembership.") {
 		var data membershipData
 		if err := json.Unmarshal(raw.Data, &data); err != nil {
 			return Event{}, true, ErrInvalidEvent
