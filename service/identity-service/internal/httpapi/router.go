@@ -44,7 +44,7 @@ func NewRouter(
 			config.ClerkWebhookProcessTimeout,
 		),
 	)
-	router.With(authenticate).Get("/me", currentUserHandler(logger, currentUserGetter))
+	router.With(currentUserResponseHeaders, authenticate).Get("/me", currentUserHandler(logger, currentUserGetter))
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "route not found", nil)
