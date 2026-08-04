@@ -25,6 +25,12 @@ type database interface {
 	sqlcgen.DBTX
 }
 
+type transaction interface {
+	sqlcgen.DBTX
+	Commit(context.Context) error
+	Rollback(context.Context) error
+}
+
 type Repository struct {
 	db      database
 	queries *sqlcgen.Queries
@@ -81,7 +87,7 @@ func (r *Repository) ListPermissions(ctx context.Context, role string) ([]string
 }
 
 type unitOfWork struct {
-	tx      pgx.Tx
+	tx      transaction
 	queries *sqlcgen.Queries
 }
 
