@@ -103,7 +103,9 @@ services:
       REDIS_ADDR: ${REDIS_ADDR:?REDIS_ADDR is required}
       REDIS_USERNAME: ${REDIS_USERNAME:-default}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-      REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-true}
+      # Local Compose Redis is plaintext on the private Docker network.
+      # Production Upstash deployments must explicitly set this to true.
+      REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-false}
       REDIS_DIAL_TIMEOUT: ${REDIS_DIAL_TIMEOUT:-500ms}
       REDIS_OPERATION_TIMEOUT: ${REDIS_OPERATION_TIMEOUT:-150ms}
       CURRENT_USER_CACHE_TTL: ${CURRENT_USER_CACHE_TTL:-30s}
