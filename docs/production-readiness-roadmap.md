@@ -1,6 +1,6 @@
 # Production Readiness Roadmap
 
-This document records focused operational work for Identity Service and Organization Service. PR #8 implements bounded metrics and structured access logs. PR #9 adds the repeatable load-test harness and deterministic connection-budget methodology. Identity current-user cache-aside is complete. Actual production pool sizing, traffic protection, tracing, and retention remain separate work with measured rollout criteria.
+This document records focused operational work for Identity Service and Organization Service. PR #8 implements bounded metrics and structured access logs. PR #9 adds the repeatable load-test harness and deterministic connection-budget methodology. Identity current-user cache-aside is complete with shared generation fencing that prevents a successful post-commit invalidation from being overwritten by an older in-flight cache fill. Actual production pool sizing, traffic protection, tracing, and retention remain separate work with measured rollout criteria.
 
 ## Group A — Traffic protection and capacity
 
@@ -136,13 +136,17 @@ Tracing exporters are operational dependencies only. They must not make service 
 
 ### Identity `/me` Upstash Redis cache-aside — completed
 
-Identity now applies cache-aside at the `currentuser.Reader` boundary. PostgreSQL remains authoritative; Redis miss, timeout, corruption, or outage falls back to PostgreSQL. Redis is not pinged during startup and is excluded from readiness.
+Identity applies cache-aside at the `currentuser.Reader` boundary. PostgreSQL remains authoritative; Redis miss, timeout, corruption, generation-read failure, CAS failure, or outage falls back to PostgreSQL. Redis is not pinged during startup and is excluded from readiness.
 
-The cache uses a SHA-256-derived versioned key, strict schema-versioned JSON values, a 30-second default TTL with a five-minute maximum, no negative caching, and per-process same-key miss coalescing. Successful user-sync `processed`, `duplicate`, and `stale` results invalidate the shared key only after transaction commit. Invalidation errors preserve the committed webhook result and rely on TTL to bound residual stale data.
+The cache uses SHA-256-derived versioned data and generation keys, strict schema-versioned JSON values, a 30-second default data TTL with a five-minute maximum, no negative caching, and per-process same-key miss coalescing. A cold loader reads the shared generation before PostgreSQL and performs an atomic generation-CAS `SET`. Successful user-sync `processed`, `duplicate`, and `stale` results run one post-commit Redis operation that increments the generation, refreshes its 10-minute expiry, and deletes the shared data key.
 
-A valid warm cache hit may serve `/me` during a PostgreSQL outage while `/health/ready` remains failed. Cold misses preserve the existing sanitized `503`. Multi-replica Identity instances share Redis and observe the same invalidation namespace. Metrics use only bounded operation/outcome labels.
+The generation marker lifetime exceeds the bounded two-second shared PostgreSQL load. Consequently, when invalidation succeeds, an older in-flight load from any Identity replica cannot repopulate the cache with a pre-invalidation projection. A rejected fill returns the PostgreSQL result to its existing caller but records a bounded `set,stale` metric and does not modify Redis.
 
-Production Upstash requires TLS and secret-managed credentials. Local Redis is private Compose infrastructure for development and CI only. Configuration, failure matrix, stale-risk analysis, verification, and rollback are documented in [`runbooks/identity-current-user-cache.md`](runbooks/identity-current-user-cache.md).
+If the entire Redis invalidation operation fails after PostgreSQL commit, the committed webhook result is preserved and the data TTL still bounds residual stale data. The service does not claim zero-staleness during an actual Redis timeout or rejection. This is distinct from the successful-invalidation cache-fill race, which the shared generation CAS prevents.
+
+A valid warm cache hit may serve `/me` during a PostgreSQL outage while `/health/ready` remains failed. Cold misses preserve the existing sanitized `503`. Multi-replica Identity instances share both Redis namespaces and the same invalidation fence. Metrics use only bounded operation/outcome labels.
+
+Production Upstash requires TLS and secret-managed credentials. Local Redis is plaintext private Compose infrastructure for development and CI only, and the Compose boundary defaults TLS off for that local topology. Configuration, failure matrix, fencing semantics, stale-risk analysis, verification, and cursor-based rollback are documented in [`runbooks/identity-current-user-cache.md`](runbooks/identity-current-user-cache.md).
 
 ### Webhook inbox retention — pending
 
@@ -173,4 +177,4 @@ The static-key design has limited overlap support. A future design should evalua
 
 The observability foundation enforces compile-time webhook outcomes, bounded HTTP method and route labels, service-specific webhook aggregates, private metrics isolation, and deterministic shutdown ordering. PR #9 consumes that telemetry through a repeatable load-test and capacity-reporting harness.
 
-PR #9 completes the repeatable load-test harness and deterministic capacity methodology. This focused PR completes Identity `/me` cache-aside within the current service boundary. Representative production pool sizing, rate limiting, OpenTelemetry, inbox retention, and JWT/JWKS rotation remain separate work.
+PR #9 completes the repeatable load-test harness and deterministic capacity methodology. This focused PR completes Identity `/me` cache-aside, including shared generation fencing for successful post-commit invalidation, within the current service boundary. Representative production pool sizing, rate limiting, OpenTelemetry, inbox retention, and JWT/JWKS rotation remain separate work.
