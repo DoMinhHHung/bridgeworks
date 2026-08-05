@@ -10,8 +10,8 @@ import (
 )
 
 type fakeFenceState struct {
-	generations       map[string]uint64
-	generationError  error
+	generations     map[string]uint64
+	generationError error
 }
 
 var fakeFenceStates sync.Map
