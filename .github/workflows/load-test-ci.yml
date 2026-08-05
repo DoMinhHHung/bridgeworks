@@ -101,7 +101,15 @@ jobs:
           git diff --exit-code origin/main...HEAD -- \
             service/organization-service/migrations/000001_create_organization_foundation.sql
           git diff --exit-code origin/main...HEAD -- \
-            compose.yaml .env.example gateway/apisix/conf/apisix.yaml gateway/apisix/conf/config.yaml
+            gateway/apisix/conf/apisix.yaml gateway/apisix/conf/config.yaml
+          grep --quiet --fixed-strings 'DATABASE_MAX_CONNS=5' .env.example
+          grep --quiet --fixed-strings 'DATABASE_MIN_CONNS=0' .env.example
+          grep --quiet --fixed-strings 'ORGANIZATION_DATABASE_MAX_CONNS=5' .env.example
+          grep --quiet --fixed-strings 'ORGANIZATION_DATABASE_MIN_CONNS=0' .env.example
+          grep --quiet --fixed-strings 'DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-5}' compose.yaml
+          grep --quiet --fixed-strings 'DATABASE_MIN_CONNS: ${DATABASE_MIN_CONNS:-0}' compose.yaml
+          grep --quiet --fixed-strings 'DATABASE_MAX_CONNS: ${ORGANIZATION_DATABASE_MAX_CONNS:-5}' compose.yaml
+          grep --quiet --fixed-strings 'DATABASE_MIN_CONNS: ${ORGANIZATION_DATABASE_MIN_CONNS:-0}' compose.yaml
           test ! -f loadtest/go.mod
           grep --quiet --fixed-strings 'grafana/k6:2.0.0' loadtest/scripts/harness.sh
           grep --quiet --fixed-strings 'python:3.13.5-alpine3.22' loadtest/scripts/harness.sh
