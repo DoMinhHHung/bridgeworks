@@ -479,6 +479,14 @@ jobs:
           PY
 
           psql_value "update app.app_users set status = 'disabled' where clerk_user_id = 'user_ci_me_active' returning status" | grep --quiet '^disabled$'
+          # This test mutates PostgreSQL directly and therefore bypasses the production
+          # post-commit webhook invalidation decorator. Remove the primed entry explicitly.
+          lifecycle_cache_hash="$(printf '%s' user_ci_me_active | sha256sum | awk '{print $1}')"
+          docker compose exec -T \
+            -e REDISCLI_AUTH="${REDIS_PASSWORD}" \
+            identity-redis redis-cli \
+            DEL "bridgeworks:identity:current-user:v1:${lifecycle_cache_hash}" \
+            >/dev/null
           disabled_before="$(psql_value "select id::text, id_user, primary_email::text, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")"
           disabled_status="$(request_me "${auth_work}/valid.token" me-disabled "${response_work}/disabled-body.json" "${response_work}/disabled-headers")"
           test "${disabled_status}" = "403"
@@ -486,6 +494,11 @@ jobs:
           test "$(psql_value "select id::text, id_user, primary_email::text, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")" = "${disabled_before}"
 
           psql_value "update app.app_users set status = 'deleted', primary_email = null where clerk_user_id = 'user_ci_me_active' returning status" | grep --quiet '^deleted$'
+          docker compose exec -T \
+            -e REDISCLI_AUTH="${REDIS_PASSWORD}" \
+            identity-redis redis-cli \
+            DEL "bridgeworks:identity:current-user:v1:${lifecycle_cache_hash}" \
+            >/dev/null
           deleted_before="$(psql_value "select id::text, id_user, primary_email is null, status, created_at::text, updated_at::text from app.app_users where clerk_user_id = 'user_ci_me_active'")"
           deleted_status="$(request_me "${auth_work}/valid.token" me-deleted "${response_work}/deleted-body.json" "${response_work}/deleted-headers")"
           test "${deleted_status}" = "403"
