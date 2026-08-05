@@ -337,3 +337,9 @@ A future pool-default PR must preserve a known-good value and roll back for:
 - worse degradation behavior than the accepted baseline.
 
 Actual production pool sizing remains pending until representative deployment measurements are reviewed. CI smoke and restart regressions alone must never change committed pool defaults.
+
+## Identity cache benchmarking follow-up
+
+The existing Identity `/me` smoke and replica-restart scenarios must remain cache-compatible, but their pass policy continues to reconcile client traffic with application HTTP telemetry rather than infer cache correctness. Cache hit/miss/set/delete metrics are validated by focused Identity integration tests and are not added to PR #9 pass semantics.
+
+GitHub-hosted results can confirm that the cached and fallback paths remain functional. They are not production cache-latency, hit-rate, Upstash-region, or cost claims. Representative-environment benchmarking should compare warm hits, cold misses, Redis timeout fallback, PostgreSQL outage behavior, realistic replica counts, Upstash region placement, and the Organization-to-Identity timeout budget before changing TTL or timeout defaults.

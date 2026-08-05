@@ -1,6 +1,6 @@
 # Production Readiness Roadmap
 
-This document records focused operational work for Identity Service and Organization Service. PR #8 implements bounded metrics and structured access logs. PR #9 adds the repeatable load-test harness and deterministic connection-budget methodology. Actual production pool sizing, traffic protection, tracing, caching, and retention remain separate work with measured rollout criteria.
+This document records focused operational work for Identity Service and Organization Service. PR #8 implements bounded metrics and structured access logs. PR #9 adds the repeatable load-test harness and deterministic connection-budget methodology. Identity current-user cache-aside is complete. Actual production pool sizing, traffic protection, tracing, and retention remain separate work with measured rollout criteria.
 
 ## Group A — Traffic protection and capacity
 
@@ -134,24 +134,15 @@ Tracing exporters are operational dependencies only. They must not make service 
 
 ## Group C — Lifecycle operations
 
-### Identity `/me` Upstash Redis cache-aside — pending
+### Identity `/me` Upstash Redis cache-aside — completed
 
-A future Identity PR may introduce Upstash Redis cache-aside for the local account projection returned by `/me`.
+Identity now applies cache-aside at the `currentuser.Reader` boundary. PostgreSQL remains authoritative; Redis miss, timeout, corruption, or outage falls back to PostgreSQL. Redis is not pinged during startup and is excluded from readiness.
 
-Required properties:
+The cache uses a SHA-256-derived versioned key, strict schema-versioned JSON values, a 30-second default TTL with a five-minute maximum, no negative caching, and per-process same-key miss coalescing. Successful user-sync `processed`, `duplicate`, and `stale` results invalidate the shared key only after transaction commit. Invalidation errors preserve the committed webhook result and rely on TTL to bound residual stale data.
 
-- PostgreSQL remains the source of truth;
-- a cache miss or Upstash outage falls back to PostgreSQL;
-- Redis is excluded from readiness;
-- cache entries are bounded by TTL and schema version;
-- cache invalidation occurs only after a successful user-sync transaction commits;
-- disabled and deleted status changes must invalidate or replace cached active projections;
-- cache keys and values must not expose secrets;
-- stampede behavior and negative caching require explicit design;
-- network/TLS timeout to Upstash must be short and bounded;
-- the Organization-to-Identity request timeout must still bound cache and database fallback work.
+A valid warm cache hit may serve `/me` during a PostgreSQL outage while `/health/ready` remains failed. Cold misses preserve the existing sanitized `503`. Multi-replica Identity instances share Redis and observe the same invalidation namespace. Metrics use only bounded operation/outcome labels.
 
-Do not copy a generic Redis snippet into Identity. The cache contract must be tested against webhook commit, rollback, outage, stale-entry, and multi-instance invalidation scenarios. PR #8 adds telemetry needed to measure cache impact but contains no Redis code.
+Production Upstash requires TLS and secret-managed credentials. Local Redis is private Compose infrastructure for development and CI only. Configuration, failure matrix, stale-risk analysis, verification, and rollback are documented in [`runbooks/identity-current-user-cache.md`](runbooks/identity-current-user-cache.md).
 
 ### Webhook inbox retention — pending
 
@@ -182,4 +173,4 @@ The static-key design has limited overlap support. A future design should evalua
 
 The observability foundation enforces compile-time webhook outcomes, bounded HTTP method and route labels, service-specific webhook aggregates, private metrics isolation, and deterministic shutdown ordering. PR #9 consumes that telemetry through a repeatable load-test and capacity-reporting harness.
 
-This completes the harness and methodology only. It does not complete representative production pool sizing, rate limiting, Upstash Redis cache-aside, OpenTelemetry, or inbox retention.
+PR #9 completes the repeatable load-test harness and deterministic capacity methodology. This focused PR completes Identity `/me` cache-aside within the current service boundary. Representative production pool sizing, rate limiting, OpenTelemetry, inbox retention, and JWT/JWKS rotation remain separate work.

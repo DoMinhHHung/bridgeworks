@@ -362,6 +362,7 @@ http_requests_total{service,route,method,status_class}
 http_request_duration_seconds{service,route,method}
 http_requests_in_flight{service}
 clerk_webhook_events_total{service,aggregate="user",outcome}
+current_user_cache_operations_total{service,operation,outcome}
 database_pool_*{service,pool="runtime"}
 ```
 
@@ -371,10 +372,34 @@ Every completed application request emits one structured access record containin
 
 Access logs and metrics exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk user IDs, local UUIDs, database URLs, request or response bodies, request IDs as metric labels, and raw dependency errors.
 
-Pool defaults remain unchanged until measured load tests establish throughput, latency, replica count, connection wait, and the total Supabase PostgreSQL connection budget. A later Identity cache-aside PR will use Upstash Redis with PostgreSQL fallback and Redis excluded from readiness; no Redis code exists in this observability PR.
+Pool defaults remain unchanged until representative load tests establish throughput, latency, replica count, connection wait, and the total Supabase PostgreSQL connection budget. Identity cache-aside is implemented at the `currentuser.Reader` boundary with PostgreSQL fallback and Redis excluded from readiness; production pool sizing remains separate measured work.
 
 ### Correction-round telemetry guarantees
 
 The production Clerk webhook route depends on `ProcessWithResult(context.Context, clerkwebhook.Event) (usersync.Result, error)` at compile time. There is no runtime type assertion, fallback to `Process`, or default `processed` outcome. Identity webhook metrics accept only `aggregate=user`.
 
 HTTP metric method labels use the bounded values `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`; arbitrary methods map to `OTHER`. Access logs retain the actual request method. Pool metrics are collected from `pgxpool.Stat()` at scrape time without database queries or silent panic recovery. Shutdown stops metrics serving before closing PostgreSQL. Health completion records are debug-only and are absent at the normal info log threshold.
+
+## Authenticated current-user cache
+
+`GET /api/v1/me` uses Redis cache-aside at the `currentuser.Reader` boundary:
+
+```text
+currentuser.Service
+  -> currentuser.CachedReader
+  -> PostgreSQL Reader
+```
+
+PostgreSQL `app.app_users` remains the source of truth. `currentuser.Service` still owns `active`, `disabled`, `deleted`, `identity_not_ready`, and unsupported-status decisions. Redis stores only a schema-versioned JSON projection and never stores Clerk user IDs, JWTs, sessions, webhook payloads, or HTTP response bytes.
+
+Keys use `bridgeworks:identity:current-user:v1:<sha256>` so raw provider identifiers are absent. The default TTL is 30 seconds, with a five-minute configuration maximum. Missing projections and operational errors are not negative-cached. Malformed or unknown-version values are deleted best-effort and fall back to PostgreSQL.
+
+Concurrent misses are coalesced per Identity process. Redis is shared across replicas; coalescing is not a distributed lock.
+
+The user-sync application service is wrapped by a post-commit invalidation decorator. Successful `processed`, `duplicate`, and `stale` results all delete the shared key. Errors and rollbacks do not invalidate. A Redis deletion failure never changes the committed webhook result; TTL bounds the residual stale window and a sanitized warning plus bounded metric records the failure.
+
+Redis is not pinged at startup and is excluded from readiness. A Redis outage falls back to PostgreSQL. A valid warm cache entry may serve `/me` while PostgreSQL is unavailable, but `/health/ready` still fails because readiness continues to represent PostgreSQL. A cold cache with PostgreSQL unavailable preserves the existing sanitized `503`.
+
+The external contract remains unchanged, including `Cache-Control: no-store` and `Vary: Authorization`. Production Upstash traffic requires TLS and secret-managed credentials. Local Compose Redis is private test/development infrastructure only.
+
+See [`../../docs/runbooks/identity-current-user-cache.md`](../../docs/runbooks/identity-current-user-cache.md) for configuration, failure semantics, stale-risk analysis, multi-instance behavior, metrics, and rollback.
