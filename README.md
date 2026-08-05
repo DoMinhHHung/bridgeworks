@@ -1260,6 +1260,7 @@ http_requests_total{service,route,method,status_class}
 http_request_duration_seconds{service,route,method}
 http_requests_in_flight{service}
 clerk_webhook_events_total{service,aggregate,outcome}
+current_user_cache_operations_total{service,operation,outcome}
 database_pool_acquired_connections{service,pool}
 database_pool_idle_connections{service,pool}
 database_pool_total_connections{service,pool}
@@ -1272,7 +1273,7 @@ database_pool_canceled_acquire_count_total{service,pool}
 
 Route labels use matched chi templates or the bounded fallback `unknown`. Webhook aggregates and outcomes use explicit bounded enums. PostgreSQL pool metrics are collected from `pgxpool.Stat()` at scrape time without queries or ticker goroutines.
 
-Metrics and scraping do not participate in application readiness. PostgreSQL pool defaults remain unchanged until load tests provide evidence for a safe per-replica connection budget. Redis cache-aside, using Upstash when implemented, rate limiting, OpenTelemetry tracing, and inbox retention remain separate roadmap work.
+Metrics and scraping do not participate in application readiness. PostgreSQL pool defaults remain unchanged until representative load tests provide evidence for a safe per-replica connection budget. Identity Redis cache-aside is implemented at the current-user Reader boundary; rate limiting, OpenTelemetry tracing, inbox retention, and representative production pool sizing remain separate roadmap work.
 
 ## Observability correction guarantees
 
@@ -1281,3 +1282,9 @@ Production webhook metrics now require outcome-capable application processors at
 HTTP metric method labels are restricted to `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`. Access logs preserve the actual request method for diagnostics, while arbitrary methods collapse to `OTHER` in Prometheus. Identity accepts only the `user` webhook aggregate; Organization accepts only `organization` and `membership`.
 
 PostgreSQL pool collection remains scrape-time and nil-safe, but programming panics are not silently swallowed. Graceful shutdown stops the private metrics server before the application server and PostgreSQL pool. Health request completion records are logged only at debug level; with the normal info threshold they are intentionally absent.
+
+## Identity current-user cache runtime
+
+Identity authenticated `/me` reads use a resilient Upstash-compatible Redis cache-aside layer. PostgreSQL remains authoritative, Redis is excluded from readiness, and cache failures fall back to PostgreSQL. Clerk user synchronization invalidates the shared cache only after a successful transaction commit. The public API, Clerk authentication contract, APISIX routes, PostgreSQL schema, and pool defaults are unchanged.
+
+Local Compose includes a private, memory-bounded Redis service for development and CI. Production provisions Upstash externally with TLS and secret-managed credentials. Operational details and rollback are documented in [`docs/runbooks/identity-current-user-cache.md`](docs/runbooks/identity-current-user-cache.md).

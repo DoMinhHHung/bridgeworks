@@ -4,7 +4,7 @@ SQLC_IMAGE := sqlc/sqlc:1.31.1
 IDENTITY_SQLC_GENERATED := service/identity-service/internal/store/sqlcgen
 ORGANIZATION_SQLC_GENERATED := service/organization-service/internal/store/sqlcgen
 
-.PHONY: repo-check gateway-up gateway-down gateway-restart gateway-logs stack-up stack-down stack-restart stack-logs gateway-smoke identity-migrate-up identity-migrate-status identity-migrate-version identity-db-logs identity-db-shell identity-sqlc-generate identity-sqlc-check organization-build organization-test organization-sqlc-generate organization-sqlc-check organization-migrate-up organization-migrate-status organization-migrate-version organization-smoke loadtest-unit loadtest-smoke capacity-budget ci
+.PHONY: repo-check gateway-up gateway-down gateway-restart gateway-logs stack-up stack-down stack-restart stack-logs gateway-smoke identity-cache-integration identity-migrate-up identity-migrate-status identity-migrate-version identity-db-logs identity-db-shell identity-sqlc-generate identity-sqlc-check organization-build organization-test organization-sqlc-generate organization-sqlc-check organization-migrate-up organization-migrate-status organization-migrate-version organization-smoke loadtest-unit loadtest-smoke capacity-budget ci
 
 repo-check:
 	@test -f compose.yaml
@@ -17,6 +17,11 @@ repo-check:
 	@test -f service/identity-service/cmd/identity-migrate/main.go
 	@test -f service/identity-service/migrations/000001_create_app_users.sql
 	@test -f service/identity-service/sqlc.yaml
+	@test -f service/identity-service/internal/currentuser/cache.go
+	@test -f service/identity-service/internal/rediscache/client.go
+	@test -f service/identity-service/internal/usersync/cache_invalidation.go
+	@test -x .github/scripts/verify-current-user-cache.sh
+	@test -f docs/runbooks/identity-current-user-cache.md
 	@test -f service/organization-service/go.mod
 	@test -f service/organization-service/Dockerfile
 	@test -f service/organization-service/cmd/organization-migrate/main.go
@@ -54,10 +59,13 @@ stack-restart:
 	docker compose restart apisix identity-service organization-service
 
 stack-logs:
-	docker compose logs --follow --tail=200 apisix identity-service identity-postgres organization-service organization-postgres
+	docker compose logs --follow --tail=200 apisix identity-service identity-postgres identity-redis organization-service organization-postgres
 
 gateway-smoke:
 	./gateway/apisix/scripts/smoke-test.sh
+
+identity-cache-integration:
+	bash .github/scripts/verify-current-user-cache.sh
 
 organization-smoke:
 	bash ./gateway/apisix/scripts/organization-smoke-test.sh

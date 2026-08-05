@@ -37,6 +37,46 @@ psql_value() {
     --command "$1" | sed '/^[[:space:]]*$/d'
 }
 
+current_user_cache_key() {
+  local clerk_user_id="$1"
+  python3 - "${clerk_user_id}" <<'PY'
+import hashlib
+import sys
+
+identity = sys.argv[1].encode("utf-8")
+print("bridgeworks:identity:current-user:v1:" + hashlib.sha256(identity).hexdigest())
+PY
+}
+
+redis_value() {
+  docker compose exec -T \
+    -e REDISCLI_AUTH="${REDIS_PASSWORD}" \
+    identity-redis redis-cli --no-auth-warning "$@" | tr -d '\r\n'
+}
+
+invalidate_current_user_cache() {
+  local clerk_user_id="$1"
+  local cache_key deleted
+  cache_key="$(current_user_cache_key "${clerk_user_id}")"
+  deleted="$(redis_value DEL "${cache_key}")"
+  case "${deleted}" in
+    0|1) ;;
+    *)
+      echo 'current-user browser test failed: targeted cache invalidation returned an invalid result' >&2
+      return 1
+      ;;
+  esac
+}
+
+assert_current_user_cache_state() {
+  local clerk_user_id="$1"
+  local expected="$2"
+  local cache_key actual
+  cache_key="$(current_user_cache_key "${clerk_user_id}")"
+  actual="$(redis_value EXISTS "${cache_key}")"
+  test "${actual}" = "${expected}"
+}
+
 request_me() {
   local token_file="$1"
   local request_id="$2"
@@ -129,6 +169,28 @@ assert_bearer_challenge() {
   assert_header_exact "$1" WWW-Authenticate 'Bearer realm="bridgeworks"'
 }
 
+assert_error() {
+  local body_file="$1"
+  local header_file="$2"
+  local request_id="$3"
+  local code="$4"
+  local message="$5"
+  grep --quiet --ignore-case "^X-Request-Id: ${request_id}" "${header_file}"
+  python3 - "${body_file}" "${request_id}" "${code}" "${message}" <<'PY'
+import json
+import pathlib
+import sys
+
+path, request_id, code, message = sys.argv[1:]
+value = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+assert set(value) == {"code", "message", "request_id", "details"}, value
+assert value["code"] == code, value
+assert value["message"] == message, value
+assert value["request_id"] == request_id, value
+assert value["details"] is None, value
+PY
+}
+
 allowed_preflight_headers="${response_work}/allowed-preflight-headers"
 allowed_preflight_body="${response_work}/allowed-preflight-body"
 allowed_preflight_status="$(curl --show-error --silent \
@@ -172,6 +234,7 @@ case "${blocked_preflight_status}" in
 esac
 assert_header_absent "${blocked_preflight_headers}" Access-Control-Allow-Origin
 
+current_user_id='user_ci_outage'
 actual_status="$(request_me \
   "${auth_work}/recovery.token" \
   me-cors-actual \
@@ -185,6 +248,7 @@ assert_header_token "${response_work}/actual-headers" Access-Control-Expose-Head
 assert_header_token "${response_work}/actual-headers" Vary Origin
 assert_header_absent "${response_work}/actual-headers" Access-Control-Allow-Credentials
 assert_no_store "${response_work}/actual-headers"
+assert_current_user_cache_state "${current_user_id}" 1
 
 for scenario in \
   'missing||me-cache-401-missing' \
@@ -221,6 +285,8 @@ assert_header_exact "${response_work}/not-ready-headers" Retry-After 2
 test "$(psql_value "select count(*) from app.app_users where clerk_user_id = 'user_ci_me_missing'")" = "0"
 
 psql_value "update app.app_users set status = 'disabled' where clerk_user_id = 'user_ci_outage' returning status" | grep --quiet '^disabled$'
+invalidate_current_user_cache "${current_user_id}"
+assert_current_user_cache_state "${current_user_id}" 0
 disabled_status="$(request_me \
   "${auth_work}/recovery.token" \
   me-cache-403-disabled \
@@ -228,9 +294,17 @@ disabled_status="$(request_me \
   "${response_work}/disabled-body.json" \
   "${response_work}/disabled-headers")"
 test "${disabled_status}" = "403"
+assert_error \
+  "${response_work}/disabled-body.json" \
+  "${response_work}/disabled-headers" \
+  me-cache-403-disabled \
+  account_disabled \
+  'account is disabled'
 assert_no_store "${response_work}/disabled-headers"
 
 psql_value "update app.app_users set status = 'deleted', primary_email = null where clerk_user_id = 'user_ci_outage' returning status" | grep --quiet '^deleted$'
+invalidate_current_user_cache "${current_user_id}"
+assert_current_user_cache_state "${current_user_id}" 0
 deleted_status="$(request_me \
   "${auth_work}/recovery.token" \
   me-cache-403-deleted \
@@ -238,8 +312,16 @@ deleted_status="$(request_me \
   "${response_work}/deleted-body.json" \
   "${response_work}/deleted-headers")"
 test "${deleted_status}" = "403"
+assert_error \
+  "${response_work}/deleted-body.json" \
+  "${response_work}/deleted-headers" \
+  me-cache-403-deleted \
+  account_deleted \
+  'account is deleted'
 assert_no_store "${response_work}/deleted-headers"
 
+invalidate_current_user_cache "${current_user_id}"
+assert_current_user_cache_state "${current_user_id}" 0
 identity_before="$(docker compose ps -q identity-service)"
 docker compose stop identity-postgres
 outage_status="$(request_me \
@@ -249,8 +331,28 @@ outage_status="$(request_me \
   "${response_work}/outage-body.json" \
   "${response_work}/outage-headers")"
 test "${outage_status}" = "503"
+assert_error \
+  "${response_work}/outage-body.json" \
+  "${response_work}/outage-headers" \
+  me-cache-503 \
+  service_unavailable \
+  'service temporarily unavailable'
 assert_no_store "${response_work}/outage-headers"
 
 docker compose start identity-postgres
 make gateway-smoke
 test "$(docker compose ps -q identity-service)" = "${identity_before}"
+recovery_status="$(request_me \
+  "${auth_work}/recovery.token" \
+  me-cache-recovery \
+  '' \
+  "${response_work}/recovery-body.json" \
+  "${response_work}/recovery-headers")"
+test "${recovery_status}" = "403"
+assert_error \
+  "${response_work}/recovery-body.json" \
+  "${response_work}/recovery-headers" \
+  me-cache-recovery \
+  account_deleted \
+  'account is deleted'
+assert_no_store "${response_work}/recovery-headers"

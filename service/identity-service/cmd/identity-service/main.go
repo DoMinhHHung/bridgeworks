@@ -21,6 +21,7 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/observability"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/postgres"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/rediscache"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/store"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/usersync"
 )
@@ -35,7 +36,7 @@ type shutdownServer interface {
 	Close() error
 }
 
-var _ httpapi.ClerkWebhookOutcomeProcessor = (*usersync.Service)(nil)
+var _ httpapi.ClerkWebhookOutcomeProcessor = (*usersync.InvalidatingProcessor)(nil)
 
 func main() {
 	bootstrapLogger := platform.NewLogger(os.Stdout, slog.LevelInfo)
@@ -86,6 +87,24 @@ func run(bootstrapLogger *slog.Logger) error {
 		return err
 	}
 
+	cacheClient, err := rediscache.New(rediscache.Config{
+		Addr:             cfg.RedisAddr,
+		Username:         cfg.RedisUsername,
+		Password:         cfg.RedisPassword,
+		TLSEnabled:       cfg.RedisTLSEnabled,
+		DialTimeout:      cfg.RedisDialTimeout,
+		OperationTimeout: cfg.RedisOperationTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	cleanupCache := true
+	defer func() {
+		if cleanupCache {
+			_ = cacheClient.Close()
+		}
+	}()
+
 	verifier, err := clerkwebhook.NewVerifier(cfg.ClerkWebhookSigningSecret)
 	if err != nil {
 		return err
@@ -114,7 +133,34 @@ func run(bootstrapLogger *slog.Logger) error {
 		identityid.UUIDV7Generator{},
 		idUserGenerator,
 	)
-	currentUserService := currentuser.New(identityRepository)
+	cacheInvalidator, err := currentuser.NewCacheInvalidator(
+		cacheClient,
+		cfg.RedisOperationTimeout,
+		metrics,
+	)
+	if err != nil {
+		return err
+	}
+	invalidatingSynchronizer, err := usersync.NewInvalidatingProcessor(
+		userSynchronizer,
+		cacheInvalidator,
+		logger,
+		cfg.RedisOperationTimeout,
+	)
+	if err != nil {
+		return err
+	}
+	cachedCurrentUserReader, err := currentuser.NewCachedReader(
+		identityRepository,
+		cacheClient,
+		cfg.CurrentUserCacheTTL,
+		cfg.RedisOperationTimeout,
+		metrics,
+	)
+	if err != nil {
+		return err
+	}
+	currentUserService := currentuser.New(cachedCurrentUserReader)
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -129,7 +175,7 @@ func run(bootstrapLogger *slog.Logger) error {
 			logger,
 			database,
 			verifier,
-			userSynchronizer,
+			invalidatingSynchronizer,
 			authenticate,
 			currentUserService,
 		),
@@ -178,7 +224,14 @@ func run(bootstrapLogger *slog.Logger) error {
 
 	shutdownContext, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	shutdownErr := shutdownRuntime(shutdownContext, metricsServer, server, database.Close)
+	shutdownErr := shutdownRuntime(
+		shutdownContext,
+		metricsServer,
+		server,
+		func() { _ = cacheClient.Close() },
+		database.Close,
+	)
+	cleanupCache = false
 	cleanupDatabase = false
 	if serveErr != nil {
 		return serveErr
@@ -194,6 +247,7 @@ func shutdownRuntime(
 	ctx context.Context,
 	metricsServer shutdownServer,
 	applicationServer shutdownServer,
+	closeCache func(),
 	closeDatabase func(),
 ) error {
 	var result error
@@ -202,6 +256,9 @@ func shutdownRuntime(
 	}
 	if err := shutdownHTTPServer(ctx, "application", applicationServer); err != nil && result == nil {
 		result = err
+	}
+	if closeCache != nil {
+		closeCache()
 	}
 	if closeDatabase != nil {
 		closeDatabase()

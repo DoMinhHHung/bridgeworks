@@ -29,6 +29,35 @@ services:
       start_period: 5s
     networks: [bridgeworks]
 
+  identity-redis:
+    image: redis:8.2.8-alpine3.22
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server
+        --appendonly no
+        --save ""
+        --maxmemory 64mb
+        --maxmemory-policy allkeys-lru
+        --requirepass "$${REDIS_PASSWORD}"
+    expose: ["6379"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -n "$${REDIS_PASSWORD}" &&
+          redis-cli --no-auth-warning -h 127.0.0.1 -p 6379 -a "$${REDIS_PASSWORD}" ping 2>/dev/null |
+          grep -qx PONG
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    networks: [bridgeworks]
+
   identity-migrate:
     image: bridgeworks-identity-service:local
     build:
@@ -71,6 +100,15 @@ services:
       DATABASE_MAX_CONN_LIFETIME: ${DATABASE_MAX_CONN_LIFETIME:-30m}
       DATABASE_MAX_CONN_IDLE_TIME: ${DATABASE_MAX_CONN_IDLE_TIME:-5m}
       DATABASE_HEALTH_CHECK_PERIOD: ${DATABASE_HEALTH_CHECK_PERIOD:-1m}
+      REDIS_ADDR: ${REDIS_ADDR:?REDIS_ADDR is required}
+      REDIS_USERNAME: ${REDIS_USERNAME:-default}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      # Local Compose Redis is plaintext on the private Docker network.
+      # Production Upstash deployments must explicitly set this to true.
+      REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-false}
+      REDIS_DIAL_TIMEOUT: ${REDIS_DIAL_TIMEOUT:-500ms}
+      REDIS_OPERATION_TIMEOUT: ${REDIS_OPERATION_TIMEOUT:-150ms}
+      CURRENT_USER_CACHE_TTL: ${CURRENT_USER_CACHE_TTL:-30s}
       CLERK_WEBHOOK_SIGNING_SECRET: ${CLERK_WEBHOOK_SIGNING_SECRET:?CLERK_WEBHOOK_SIGNING_SECRET is required}
       CLERK_WEBHOOK_PROCESS_TIMEOUT: ${CLERK_WEBHOOK_PROCESS_TIMEOUT:-5s}
       CLERK_WEBHOOK_MAX_BODY_BYTES: ${CLERK_WEBHOOK_MAX_BODY_BYTES:-1048576}
