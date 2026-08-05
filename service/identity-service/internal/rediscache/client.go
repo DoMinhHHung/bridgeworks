@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,25 @@ import (
 )
 
 const defaultPoolSize = 10
+
+var setIfGenerationScript = redis.NewScript(`
+local current = redis.call("GET", KEYS[2])
+if not current then
+  current = "0"
+end
+if current ~= ARGV[1] then
+  return 0
+end
+redis.call("SET", KEYS[1], ARGV[2], "PX", ARGV[3])
+return 1
+`)
+
+var invalidateScript = redis.NewScript(`
+redis.call("INCR", KEYS[2])
+redis.call("PEXPIRE", KEYS[2], ARGV[1])
+redis.call("DEL", KEYS[1])
+return 1
+`)
 
 type Config struct {
 	Addr             string
@@ -92,6 +112,70 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 		return errors.New("redis cache client is not initialized")
 	}
 	return c.client.Del(ctx, key).Err()
+}
+
+func (c *Client) GetGeneration(ctx context.Context, key string) (uint64, error) {
+	if c == nil || c.client == nil {
+		return 0, errors.New("redis cache client is not initialized")
+	}
+	value, err := c.client.Get(ctx, key).Uint64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func (c *Client) SetIfGeneration(
+	ctx context.Context,
+	key string,
+	generationKey string,
+	expectedGeneration uint64,
+	value []byte,
+	ttl time.Duration,
+) (bool, error) {
+	if c == nil || c.client == nil {
+		return false, errors.New("redis cache client is not initialized")
+	}
+	ttlMilliseconds := ttl.Milliseconds()
+	if ttlMilliseconds <= 0 {
+		return false, errors.New("redis cache TTL must be at least one millisecond")
+	}
+	result, err := setIfGenerationScript.Run(
+		ctx,
+		c.client,
+		[]string{key, generationKey},
+		strconv.FormatUint(expectedGeneration, 10),
+		value,
+		strconv.FormatInt(ttlMilliseconds, 10),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *Client) Invalidate(
+	ctx context.Context,
+	key string,
+	generationKey string,
+	generationTTL time.Duration,
+) error {
+	if c == nil || c.client == nil {
+		return errors.New("redis cache client is not initialized")
+	}
+	generationTTLMilliseconds := generationTTL.Milliseconds()
+	if generationTTLMilliseconds <= 0 {
+		return errors.New("redis cache generation TTL must be at least one millisecond")
+	}
+	return invalidateScript.Run(
+		ctx,
+		c.client,
+		[]string{key, generationKey},
+		strconv.FormatInt(generationTTLMilliseconds, 10),
+	).Err()
 }
 
 func (c *Client) Close() error {
