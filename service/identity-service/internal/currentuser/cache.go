@@ -17,18 +17,21 @@ import (
 )
 
 const (
-	cacheSchemaVersion   = 1
-	cacheKeyPrefix       = "bridgeworks:identity:current-user:v1:"
-	maxCacheValueBytes   = 4 * 1024
-	coalescedLoadTimeout = 2 * time.Second
-	cacheOperationGet    = "get"
-	cacheOperationSet    = "set"
-	cacheOperationDelete = "delete"
-	cacheOutcomeHit      = "hit"
-	cacheOutcomeMiss     = "miss"
-	cacheOutcomeSuccess  = "success"
-	cacheOutcomeError    = "error"
-	cacheOutcomeInvalid  = "invalid"
+	cacheSchemaVersion        = 1
+	cacheKeyPrefix            = "bridgeworks:identity:current-user:v1:"
+	cacheGenerationKeyPrefix  = "bridgeworks:identity:current-user-generation:v1:"
+	maxCacheValueBytes        = 4 * 1024
+	coalescedLoadTimeout      = 2 * time.Second
+	cacheGenerationMarkerTTL  = 10 * time.Minute
+	cacheOperationGet         = "get"
+	cacheOperationSet         = "set"
+	cacheOperationDelete      = "delete"
+	cacheOutcomeHit           = "hit"
+	cacheOutcomeMiss          = "miss"
+	cacheOutcomeSuccess       = "success"
+	cacheOutcomeError         = "error"
+	cacheOutcomeInvalid       = "invalid"
+	cacheOutcomeStale         = "stale"
 )
 
 var idUserPattern = regexp.MustCompile(`^bw[0-9]{12}$`)
@@ -39,13 +42,27 @@ type Cache interface {
 	Delete(context.Context, string) error
 }
 
+type FencedCache interface {
+	Cache
+	GetGeneration(context.Context, string) (uint64, error)
+	SetIfGeneration(
+		context.Context,
+		string,
+		string,
+		uint64,
+		[]byte,
+		time.Duration,
+	) (bool, error)
+	Invalidate(context.Context, string, string, time.Duration) error
+}
+
 type CacheObserver interface {
 	ObserveCurrentUserCache(operation, outcome string)
 }
 
 type CachedReader struct {
 	reader           Reader
-	cache            Cache
+	cache            FencedCache
 	ttl              time.Duration
 	operationTimeout time.Duration
 	observer         CacheObserver
@@ -53,7 +70,7 @@ type CachedReader struct {
 }
 
 type CacheInvalidator struct {
-	cache            Cache
+	cache            FencedCache
 	operationTimeout time.Duration
 	observer         CacheObserver
 }
@@ -86,6 +103,10 @@ func NewCachedReader(
 	if cache == nil {
 		return nil, errors.New("current user cache is required")
 	}
+	fencedCache, ok := cache.(FencedCache)
+	if !ok {
+		return nil, errors.New("current user cache must support generation fencing")
+	}
 	if ttl <= 0 {
 		return nil, errors.New("current user cache TTL must be greater than zero")
 	}
@@ -94,7 +115,7 @@ func NewCachedReader(
 	}
 	return &CachedReader{
 		reader:           reader,
-		cache:            cache,
+		cache:            fencedCache,
 		ttl:              ttl,
 		operationTimeout: operationTimeout,
 		observer:         observer,
@@ -109,22 +130,42 @@ func NewCacheInvalidator(
 	if cache == nil {
 		return nil, errors.New("current user cache is required")
 	}
+	fencedCache, ok := cache.(FencedCache)
+	if !ok {
+		return nil, errors.New("current user cache must support generation fencing")
+	}
 	if operationTimeout <= 0 {
 		return nil, errors.New("current user cache operation timeout must be greater than zero")
 	}
 	return &CacheInvalidator{
-		cache:            cache,
+		cache:            fencedCache,
 		operationTimeout: operationTimeout,
 		observer:         observer,
 	}, nil
 }
 
 func CurrentUserCacheKey(clerkUserID string) (string, error) {
+	digest, err := currentUserCacheDigest(clerkUserID)
+	if err != nil {
+		return "", err
+	}
+	return cacheKeyPrefix + digest, nil
+}
+
+func CurrentUserCacheGenerationKey(clerkUserID string) (string, error) {
+	digest, err := currentUserCacheDigest(clerkUserID)
+	if err != nil {
+		return "", err
+	}
+	return cacheGenerationKeyPrefix + digest, nil
+}
+
+func currentUserCacheDigest(clerkUserID string) (string, error) {
 	if strings.TrimSpace(clerkUserID) == "" {
 		return "", errors.New("current user cache identity is required")
 	}
 	digest := sha256.Sum256([]byte(clerkUserID))
-	return cacheKeyPrefix + hex.EncodeToString(digest[:]), nil
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (r *CachedReader) GetCurrentUserByClerkUserID(
@@ -138,6 +179,10 @@ func (r *CachedReader) GetCurrentUserByClerkUserID(
 	if err != nil {
 		return User{}, false, err
 	}
+	generationKey, err := CurrentUserCacheGenerationKey(clerkUserID)
+	if err != nil {
+		return User{}, false, err
+	}
 
 	if user, hit := r.get(ctx, key, clerkUserID); hit {
 		return user, true, nil
@@ -147,12 +192,13 @@ func (r *CachedReader) GetCurrentUserByClerkUserID(
 		loadContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), coalescedLoadTimeout)
 		defer cancel()
 
+		generation, canPopulate := r.generation(loadContext, generationKey)
 		user, found, loadErr := r.reader.GetCurrentUserByClerkUserID(loadContext, clerkUserID)
 		if loadErr != nil {
 			return readResult{}, loadErr
 		}
-		if found {
-			r.set(loadContext, key, user)
+		if found && canPopulate {
+			r.setIfGeneration(loadContext, key, generationKey, generation, user)
 		}
 		return readResult{user: user, found: found}, nil
 	})
@@ -196,7 +242,24 @@ func (r *CachedReader) get(ctx context.Context, key, clerkUserID string) (User, 
 	return user, true
 }
 
-func (r *CachedReader) set(ctx context.Context, key string, user User) {
+func (r *CachedReader) generation(ctx context.Context, generationKey string) (uint64, bool) {
+	operationContext, cancel := context.WithTimeout(ctx, r.operationTimeout)
+	defer cancel()
+	generation, err := r.cache.GetGeneration(operationContext, generationKey)
+	if err != nil {
+		r.observe(cacheOperationSet, cacheOutcomeError)
+		return 0, false
+	}
+	return generation, true
+}
+
+func (r *CachedReader) setIfGeneration(
+	ctx context.Context,
+	key string,
+	generationKey string,
+	expectedGeneration uint64,
+	user User,
+) {
 	payload, err := encodeCacheValue(user)
 	if err != nil {
 		r.observe(cacheOperationSet, cacheOutcomeError)
@@ -204,8 +267,20 @@ func (r *CachedReader) set(ctx context.Context, key string, user User) {
 	}
 	operationContext, cancel := context.WithTimeout(ctx, r.operationTimeout)
 	defer cancel()
-	if err := r.cache.Set(operationContext, key, payload, r.ttl); err != nil {
+	stored, err := r.cache.SetIfGeneration(
+		operationContext,
+		key,
+		generationKey,
+		expectedGeneration,
+		payload,
+		r.ttl,
+	)
+	if err != nil {
 		r.observe(cacheOperationSet, cacheOutcomeError)
+		return
+	}
+	if !stored {
+		r.observe(cacheOperationSet, cacheOutcomeStale)
 		return
 	}
 	r.observe(cacheOperationSet, cacheOutcomeSuccess)
@@ -235,9 +310,18 @@ func (i *CacheInvalidator) Invalidate(ctx context.Context, clerkUserID string) e
 	if err != nil {
 		return err
 	}
+	generationKey, err := CurrentUserCacheGenerationKey(clerkUserID)
+	if err != nil {
+		return err
+	}
 	operationContext, cancel := context.WithTimeout(ctx, i.operationTimeout)
 	defer cancel()
-	if err := i.cache.Delete(operationContext, key); err != nil {
+	if err := i.cache.Invalidate(
+		operationContext,
+		key,
+		generationKey,
+		cacheGenerationMarkerTTL,
+	); err != nil {
 		i.observe(cacheOperationDelete, cacheOutcomeError)
 		return err
 	}
