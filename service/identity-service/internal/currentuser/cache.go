@@ -17,21 +17,21 @@ import (
 )
 
 const (
-	cacheSchemaVersion        = 1
-	cacheKeyPrefix            = "bridgeworks:identity:current-user:v1:"
-	cacheGenerationKeyPrefix  = "bridgeworks:identity:current-user-generation:v1:"
-	maxCacheValueBytes        = 4 * 1024
-	coalescedLoadTimeout      = 2 * time.Second
-	cacheGenerationMarkerTTL  = 10 * time.Minute
-	cacheOperationGet         = "get"
-	cacheOperationSet         = "set"
-	cacheOperationDelete      = "delete"
-	cacheOutcomeHit           = "hit"
-	cacheOutcomeMiss          = "miss"
-	cacheOutcomeSuccess       = "success"
-	cacheOutcomeError         = "error"
-	cacheOutcomeInvalid       = "invalid"
-	cacheOutcomeStale         = "stale"
+	cacheSchemaVersion       = 1
+	cacheKeyPrefix           = "bridgeworks:identity:current-user:v1:"
+	cacheGenerationKeyPrefix = "bridgeworks:identity:current-user-generation:v1:"
+	maxCacheValueBytes       = 4 * 1024
+	coalescedLoadTimeout     = 2 * time.Second
+	cacheGenerationMarkerTTL = 10 * time.Minute
+	cacheOperationGet        = "get"
+	cacheOperationSet        = "set"
+	cacheOperationDelete     = "delete"
+	cacheOutcomeHit          = "hit"
+	cacheOutcomeMiss         = "miss"
+	cacheOutcomeSuccess      = "success"
+	cacheOutcomeError        = "error"
+	cacheOutcomeInvalid      = "invalid"
+	cacheOutcomeStale        = "stale"
 )
 
 var idUserPattern = regexp.MustCompile(`^bw[0-9]{12}$`)
