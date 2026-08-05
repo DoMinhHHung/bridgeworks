@@ -4,16 +4,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
-for command in docker curl go python3 grep; do
+for command in docker curl go python3 grep stat; do
   command -v "${command}" >/dev/null 2>&1 || {
     printf 'identity cache integration failed: missing command %s\n' "${command}" >&2
     exit 1
   }
 done
 
+umask 077
 test -f .env.example
 cp .env.example .env
-umask 077
+env_mode="$(stat -c '%a' .env)"
+if (( (8#${env_mode} & 8#077) != 0 )); then
+  printf 'identity cache integration failed: generated .env permissions are too broad\n' >&2
+  exit 1
+fi
 work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/bridgeworks-identity-cache.XXXXXX")"
 auth_dir="${work}/auth"
 responses="${work}/responses"
@@ -316,6 +321,14 @@ print("bridgeworks:identity:current-user:v1:" + hashlib.sha256(sys.argv[1].encod
 PY
 }
 
+cache_generation_key() {
+  python3 - "$1" <<'PY'
+import hashlib
+import sys
+print("bridgeworks:identity:current-user-generation:v1:" + hashlib.sha256(sys.argv[1].encode()).hexdigest())
+PY
+}
+
 direct_me() {
   local container="$1" token="$2" request_id="$3" output="$4"
   docker exec "${container}" wget --quiet --output-document=- \
@@ -450,10 +463,16 @@ case "${port_bindings}" in
   null|'{}') ;;
   *) printf 'identity cache integration failed: Redis published host ports\n' >&2; exit 1 ;;
 esac
-! grep -R --line-number --ignore-case 'redis' gateway/apisix
+if grep -R --line-number --ignore-case 'redis' gateway/apisix; then
+  printf 'identity cache integration failed: APISIX references Redis\n' >&2
+  exit 1
+fi
 apisix_id="$(docker compose --env-file .env ps -q apisix)"
 inspect_apisix="$(docker inspect "${apisix_id}")"
-! grep --quiet --fixed-strings 'identity-redis' <<< "${inspect_apisix}"
+if grep --quiet --fixed-strings 'identity-redis' <<< "${inspect_apisix}"; then
+  printf 'identity cache integration failed: APISIX depends on identity-redis\n' >&2
+  exit 1
+fi
 
 # 15: retained responses, private metrics, and Identity logs are sanitized.
 all_metrics="$(scrape_all_metrics final)"
@@ -461,19 +480,29 @@ identity_logs="${work}/identity.log"
 docker compose --env-file .env logs --no-color identity-service > "${identity_logs}"
 for forbidden in \
   "${redis_password}" \
-  "${REDIS_ADDR}" \
+  "${REDIS_ADDR:-}" \
   "${tokens[a]}" "${tokens[b]}" "${tokens[c]}" "${tokens[d]}" "${tokens[e]}" \
   "${sessions[a]}" "${sessions[b]}" "${sessions[c]}" "${sessions[d]}" "${sessions[e]}" \
   "${user_a}" "${user_b}" "${user_c}" "${user_d}" "${user_e}" \
   "$(cache_key "${user_a}")" "$(cache_key "${user_b}")" "$(cache_key "${user_c}")" \
-  "$(cache_key "${user_d}")" "$(cache_key "${user_e}")"; do
+  "$(cache_key "${user_d}")" "$(cache_key "${user_e}")" \
+  "$(cache_generation_key "${user_a}")" "$(cache_generation_key "${user_b}")" \
+  "$(cache_generation_key "${user_c}")" "$(cache_generation_key "${user_d}")" \
+  "$(cache_generation_key "${user_e}")"; do
+  [[ -n "${forbidden}" ]] || continue
   if grep --quiet --fixed-strings -- "${forbidden}" "${identity_logs}" "${all_metrics}"; then
     printf 'identity cache integration failed: sensitive runtime value retained\n' >&2
     exit 1
   fi
 done
-! grep --quiet --extended-regexp '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${identity_logs}" "${all_metrics}"
-! grep --quiet --extended-regexp 'connection refused|dial tcp|i/o timeout|redis: nil|WRONGPASS|NOAUTH' "${identity_logs}"
+if grep --quiet --extended-regexp '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "${identity_logs}" "${all_metrics}"; then
+  printf 'identity cache integration failed: email retained in logs or metrics\n' >&2
+  exit 1
+fi
+if grep --quiet --extended-regexp 'connection refused|dial tcp|i/o timeout|redis: nil|WRONGPASS|NOAUTH' "${identity_logs}"; then
+  printf 'identity cache integration failed: raw Redis error retained in logs\n' >&2
+  exit 1
+fi
 grep --quiet 'current_user_cache_operations_total' "${all_metrics}"
 grep --quiet 'operation="get"' "${all_metrics}"
 grep --quiet 'operation="set"' "${all_metrics}"
