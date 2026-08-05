@@ -7,12 +7,15 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
 )
 
 const defaultPoolSize = 10
+
+var configureLibraryLoggerOnce sync.Once
 
 var setIfGenerationScript = redis.NewScript(`
 local current = redis.call("GET", KEYS[2])
@@ -32,6 +35,10 @@ redis.call("PEXPIRE", KEYS[2], ARGV[1])
 redis.call("DEL", KEYS[1])
 return 1
 `)
+
+type voidLogger struct{}
+
+func (voidLogger) Printf(context.Context, string, ...interface{}) {}
 
 type Config struct {
 	Addr             string
@@ -63,6 +70,14 @@ func New(cfg Config) (*Client, error) {
 	if cfg.OperationTimeout <= 0 {
 		return nil, errors.New("redis operation timeout must be greater than zero")
 	}
+
+	// go-redis writes connection-pool diagnostics, including raw network errors,
+	// to stderr through a package-global logger. Identity owns bounded cache
+	// telemetry and sanitized application warnings, so suppress the dependency
+	// logger before constructing the first client.
+	configureLibraryLoggerOnce.Do(func() {
+		redis.SetLogger(voidLogger{})
+	})
 
 	options := &redis.Options{
 		Addr:                  strings.TrimSpace(cfg.Addr),
