@@ -387,19 +387,26 @@ HTTP metric method labels use the bounded values `GET|POST|PUT|PATCH|DELETE|HEAD
 ```text
 currentuser.Service
   -> currentuser.CachedReader
-  -> PostgreSQL Reader
+  -> Redis GET
+       hit: validate and return cached projection
+       miss/error/corruption:
+         -> read shared generation marker
+         -> PostgreSQL Reader
+         -> atomic generation-CAS SET
 ```
 
 PostgreSQL `app.app_users` remains the source of truth. `currentuser.Service` still owns `active`, `disabled`, `deleted`, `identity_not_ready`, and unsupported-status decisions. Redis stores only a schema-versioned JSON projection and never stores Clerk user IDs, JWTs, sessions, webhook payloads, or HTTP response bytes.
 
-Keys use `bridgeworks:identity:current-user:v1:<sha256>` so raw provider identifiers are absent. The default TTL is 30 seconds, with a five-minute configuration maximum. Missing projections and operational errors are not negative-cached. Malformed or unknown-version values are deleted best-effort and fall back to PostgreSQL.
+Data keys use `bridgeworks:identity:current-user:v1:<sha256>` and generation keys use `bridgeworks:identity:current-user-generation:v1:<sha256>`, so raw provider identifiers are absent. The default data TTL is 30 seconds, with a five-minute configuration maximum. Missing projections and operational errors are not negative-cached. Malformed or unknown-version values are deleted best-effort and fall back to PostgreSQL.
 
-Concurrent misses are coalesced per Identity process. Redis is shared across replicas; coalescing is not a distributed lock.
+Concurrent misses are coalesced per Identity process. Redis is shared across replicas; coalescing is not a distributed lock. A loader observes the shared generation before its PostgreSQL read and may populate Redis only through an atomic Lua compare-and-set when that generation is unchanged.
 
-The user-sync application service is wrapped by a post-commit invalidation decorator. Successful `processed`, `duplicate`, and `stale` results all delete the shared key. Errors and rollbacks do not invalidate. A Redis deletion failure never changes the committed webhook result; TTL bounds the residual stale window and a sanitized warning plus bounded metric records the failure.
+The user-sync application service is wrapped by a post-commit invalidation decorator. Successful `processed`, `duplicate`, and `stale` results atomically increment the generation, refresh its 10-minute expiry, and delete the shared data key. Errors and rollbacks do not invalidate. The generation marker outlives the bounded two-second shared PostgreSQL load, so an older loader cannot repopulate a pre-invalidation projection after a successful invalidation.
+
+A Redis invalidation-operation failure never changes the committed webhook result; the data TTL bounds the residual stale window and a sanitized warning plus bounded metric records the failure. The cache does not claim zero-staleness while Redis rejects or times out the invalidation. A generation-CAS rejection is recorded only as bounded `set,stale` telemetry and does not write Redis.
 
 Redis is not pinged at startup and is excluded from readiness. A Redis outage falls back to PostgreSQL. A valid warm cache entry may serve `/me` while PostgreSQL is unavailable, but `/health/ready` still fails because readiness continues to represent PostgreSQL. A cold cache with PostgreSQL unavailable preserves the existing sanitized `503`.
 
-The external contract remains unchanged, including `Cache-Control: no-store` and `Vary: Authorization`. Production Upstash traffic requires TLS and secret-managed credentials. Local Compose Redis is private test/development infrastructure only.
+The Redis client uses `MaxRetries=-1` to disable automatic retries and preserve bounded operation timeouts. The external contract remains unchanged, including `Cache-Control: no-store` and `Vary: Authorization`. Production Upstash traffic requires TLS and secret-managed credentials. Local Compose Redis is plaintext private test/development infrastructure and explicitly defaults TLS off for that topology.
 
-See [`../../docs/runbooks/identity-current-user-cache.md`](../../docs/runbooks/identity-current-user-cache.md) for configuration, failure semantics, stale-risk analysis, multi-instance behavior, metrics, and rollback.
+See [`../../docs/runbooks/identity-current-user-cache.md`](../../docs/runbooks/identity-current-user-cache.md) for configuration, failure semantics, fencing guarantees, stale-risk analysis, multi-instance behavior, metrics, and cursor-based rollback.
