@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -26,6 +27,14 @@ const (
 	defaultDatabaseMaxConnLifetime    = 30 * time.Minute
 	defaultDatabaseMaxConnIdleTime    = 5 * time.Minute
 	defaultDatabaseHealthCheckPeriod  = time.Minute
+	defaultRedisUsername              = "default"
+	defaultRedisTLSEnabled            = true
+	defaultRedisDialTimeout           = 500 * time.Millisecond
+	maximumRedisDialTimeout           = 5 * time.Second
+	defaultRedisOperationTimeout      = 150 * time.Millisecond
+	maximumRedisOperationTimeout      = time.Second
+	defaultCurrentUserCacheTTL        = 30 * time.Second
+	maximumCurrentUserCacheTTL        = 5 * time.Minute
 	defaultClerkWebhookProcessTimeout = 5 * time.Second
 	maximumClerkWebhookProcessTimeout = 8 * time.Second
 	defaultClerkWebhookMaxBodyBytes   = int64(1_048_576)
@@ -53,6 +62,14 @@ type Config struct {
 	DatabaseMaxConnLifetime   time.Duration
 	DatabaseMaxConnIdleTime   time.Duration
 	DatabaseHealthCheckPeriod time.Duration
+
+	RedisAddr             string
+	RedisUsername         string
+	RedisPassword         string
+	RedisTLSEnabled       bool
+	RedisDialTimeout      time.Duration
+	RedisOperationTimeout time.Duration
+	CurrentUserCacheTTL   time.Duration
 
 	ClerkWebhookSigningSecret  string
 	ClerkWebhookProcessTimeout time.Duration
@@ -158,6 +175,44 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		return Config{}, err
 	}
 
+	redisAddr, err := redisAddressValue(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	redisUsername, err := nonEmptyValue(lookup, "REDIS_USERNAME", defaultRedisUsername)
+	if err != nil {
+		return Config{}, err
+	}
+	redisPassword, err := requiredValue(lookup, "REDIS_PASSWORD")
+	if err != nil {
+		return Config{}, err
+	}
+	redisTLSEnabled, err := boolValue(lookup, "REDIS_TLS_ENABLED", defaultRedisTLSEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	redisDialTimeout, err := durationValue(lookup, "REDIS_DIAL_TIMEOUT", defaultRedisDialTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if redisDialTimeout > maximumRedisDialTimeout {
+		return Config{}, fmt.Errorf("REDIS_DIAL_TIMEOUT must be less than or equal to %s", maximumRedisDialTimeout)
+	}
+	redisOperationTimeout, err := durationValue(lookup, "REDIS_OPERATION_TIMEOUT", defaultRedisOperationTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if redisOperationTimeout > maximumRedisOperationTimeout {
+		return Config{}, fmt.Errorf("REDIS_OPERATION_TIMEOUT must be less than or equal to %s", maximumRedisOperationTimeout)
+	}
+	currentUserCacheTTL, err := durationValue(lookup, "CURRENT_USER_CACHE_TTL", defaultCurrentUserCacheTTL)
+	if err != nil {
+		return Config{}, err
+	}
+	if currentUserCacheTTL > maximumCurrentUserCacheTTL {
+		return Config{}, fmt.Errorf("CURRENT_USER_CACHE_TTL must be less than or equal to %s", maximumCurrentUserCacheTTL)
+	}
+
 	clerkWebhookSigningSecret, err := requiredValue(lookup, "CLERK_WEBHOOK_SIGNING_SECRET")
 	if err != nil {
 		return Config{}, err
@@ -223,6 +278,13 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		DatabaseMaxConnLifetime:    databaseMaxConnLifetime,
 		DatabaseMaxConnIdleTime:    databaseMaxConnIdleTime,
 		DatabaseHealthCheckPeriod:  databaseHealthCheckPeriod,
+		RedisAddr:                  redisAddr,
+		RedisUsername:              redisUsername,
+		RedisPassword:              redisPassword,
+		RedisTLSEnabled:            redisTLSEnabled,
+		RedisDialTimeout:           redisDialTimeout,
+		RedisOperationTimeout:      redisOperationTimeout,
+		CurrentUserCacheTTL:        currentUserCacheTTL,
 		ClerkWebhookSigningSecret:  clerkWebhookSigningSecret,
 		ClerkWebhookProcessTimeout: clerkWebhookProcessTimeout,
 		ClerkWebhookMaxBodyBytes:   clerkWebhookMaxBodyBytes,
@@ -285,6 +347,18 @@ func durationValue(lookup lookupEnvFunc, key string, fallback time.Duration) (ti
 	return value, nil
 }
 
+func boolValue(lookup lookupEnvFunc, key string, fallback bool) (bool, error) {
+	raw, ok := lookup(key)
+	if !ok {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", key)
+	}
+	return value, nil
+}
+
 func int32Value(lookup lookupEnvFunc, key string, fallback int32) (int32, error) {
 	raw, ok := lookup(key)
 	if !ok {
@@ -307,6 +381,25 @@ func int64Value(lookup lookupEnvFunc, key string, fallback int64) (int64, error)
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid integer", key)
+	}
+	return value, nil
+}
+
+func redisAddressValue(lookup lookupEnvFunc) (string, error) {
+	value, err := requiredValue(lookup, "REDIS_ADDR")
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(value, "://") || strings.Contains(value, "@") {
+		return "", fmt.Errorf("REDIS_ADDR must be a host and port without scheme or credentials")
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "", fmt.Errorf("REDIS_ADDR must be a valid host and port")
+	}
+	parsedPort, err := strconv.Atoi(port)
+	if err != nil || parsedPort < 1 || parsedPort > 65535 {
+		return "", fmt.Errorf("REDIS_ADDR must contain a valid port")
 	}
 	return value, nil
 }

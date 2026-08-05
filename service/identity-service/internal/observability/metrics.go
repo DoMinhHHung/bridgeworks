@@ -19,6 +19,16 @@ const (
 	OutcomeRejected         = "rejected"
 	OutcomeRetryableFailure = "retryable_failure"
 
+	CacheOperationGet    = "get"
+	CacheOperationSet    = "set"
+	CacheOperationDelete = "delete"
+
+	CacheOutcomeHit     = "hit"
+	CacheOutcomeMiss    = "miss"
+	CacheOutcomeSuccess = "success"
+	CacheOutcomeError   = "error"
+	CacheOutcomeInvalid = "invalid"
+
 	methodOther = "OTHER"
 )
 
@@ -39,12 +49,13 @@ type PoolStat interface {
 }
 
 type Metrics struct {
-	service       string
-	registry      *prometheus.Registry
-	httpRequests  *prometheus.CounterVec
-	httpDuration  *prometheus.HistogramVec
-	httpInFlight  *prometheus.GaugeVec
-	webhookEvents *prometheus.CounterVec
+	service          string
+	registry         *prometheus.Registry
+	httpRequests     *prometheus.CounterVec
+	httpDuration     *prometheus.HistogramVec
+	httpInFlight     *prometheus.GaugeVec
+	webhookEvents    *prometheus.CounterVec
+	currentUserCache *prometheus.CounterVec
 }
 
 func New(service string, poolStat func() PoolStat) (*Metrics, error) {
@@ -72,6 +83,10 @@ func New(service string, poolStat func() PoolStat) (*Metrics, error) {
 			Name: "clerk_webhook_events_total",
 			Help: "Clerk webhook events grouped by bounded aggregate and outcome.",
 		}, []string{"service", "aggregate", "outcome"}),
+		currentUserCache: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "current_user_cache_operations_total",
+			Help: "Current-user cache operations grouped by bounded operation and outcome.",
+		}, []string{"service", "operation", "outcome"}),
 	}
 
 	collectors := []prometheus.Collector{
@@ -79,6 +94,7 @@ func New(service string, poolStat func() PoolStat) (*Metrics, error) {
 		metrics.httpDuration,
 		metrics.httpInFlight,
 		metrics.webhookEvents,
+		metrics.currentUserCache,
 		newPoolCollector(service, "runtime", poolStat),
 	}
 	for _, collector := range collectors {
@@ -153,6 +169,25 @@ func boundedOutcome(value string) bool {
 	switch value {
 	case OutcomeProcessed, OutcomeDuplicate, OutcomeStale, OutcomeRejected, OutcomeRetryableFailure:
 		return true
+	default:
+		return false
+	}
+}
+
+func (m *Metrics) ObserveCurrentUserCache(operation, outcome string) {
+	if m == nil || !boundedCacheOperationOutcome(operation, outcome) {
+		return
+	}
+	m.currentUserCache.WithLabelValues(m.service, operation, outcome).Inc()
+}
+
+func boundedCacheOperationOutcome(operation, outcome string) bool {
+	switch operation {
+	case CacheOperationGet:
+		return outcome == CacheOutcomeHit || outcome == CacheOutcomeMiss ||
+			outcome == CacheOutcomeError || outcome == CacheOutcomeInvalid
+	case CacheOperationSet, CacheOperationDelete:
+		return outcome == CacheOutcomeSuccess || outcome == CacheOutcomeError
 	default:
 		return false
 	}
