@@ -227,3 +227,85 @@ func TestResolveDoesNotCallIdentityWhenPlatformTokenFails(
 	default:
 	}
 }
+
+func TestResolveTreatsPlatformUnauthorizedAsUpstreamFailure(
+	t *testing.T,
+) {
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "empty Cloud Run response",
+			body: "",
+		},
+		{
+			name: "unknown upstream error code",
+			body: `{"code":"platform_unauthorized"}`,
+		},
+		{
+			name: "non-JSON Cloud Run response",
+			body: "Unauthorized",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(
+				http.HandlerFunc(
+					func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusUnauthorized)
+						_, _ = w.Write([]byte(testCase.body))
+					},
+				),
+			)
+			defer server.Close()
+
+			client, err := New(
+				server.URL,
+				time.Second,
+				withPlatformTokenProvider(
+					testPlatformTokenProvider{
+						token: "google-id-token",
+					},
+				),
+			)
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			_, err = client.Resolve(
+				context.Background(),
+				"Bearer sensitive-clerk-token",
+				"request-platform-unauthorized",
+			)
+			if err == nil {
+				t.Fatal("expected upstream authentication error")
+			}
+			if errors.Is(
+				err,
+				currentorganization.ErrUnauthorized,
+			) {
+				t.Fatal(
+					"platform authentication failure mapped to user unauthorized",
+				)
+			}
+			if strings.Contains(
+				err.Error(),
+				"sensitive-clerk-token",
+			) {
+				t.Fatal(
+					"upstream authentication error leaked Clerk token",
+				)
+			}
+			if testCase.body != "" && strings.Contains(
+				err.Error(),
+				testCase.body,
+			) {
+				t.Fatal(
+					"upstream authentication error leaked response body",
+				)
+			}
+		})
+	}
+}

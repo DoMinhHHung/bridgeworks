@@ -166,8 +166,13 @@ func (c *Client) Resolve(
 		}, nil
 
 	case http.StatusUnauthorized:
+		if decodeErrorCode(body) == "unauthorized" {
+			return currentorganization.Identity{},
+				currentorganization.ErrUnauthorized
+		}
+
 		return currentorganization.Identity{},
-			currentorganization.ErrUnauthorized
+			errors.New("unexpected identity unauthorized response")
 
 	case http.StatusForbidden:
 		code := decodeErrorCode(body)
