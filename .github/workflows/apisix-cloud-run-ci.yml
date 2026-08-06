@@ -12,6 +12,7 @@ on:
       - gateway/apisix/custom/**
       - gateway/apisix/scripts/cloud-run-entrypoint.sh
       - gateway/apisix/scripts/validate-cloud-run-image.sh
+      - gateway/apisix/README.cloud-run.md
       - .github/workflows/apisix-cloud-run-ci.yml
       - Makefile
   pull_request:
@@ -23,6 +24,7 @@ on:
       - gateway/apisix/custom/**
       - gateway/apisix/scripts/cloud-run-entrypoint.sh
       - gateway/apisix/scripts/validate-cloud-run-image.sh
+      - gateway/apisix/README.cloud-run.md
       - .github/workflows/apisix-cloud-run-ci.yml
       - Makefile
   workflow_dispatch:
@@ -43,6 +45,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Validate APISIX Cloud Run image
         shell: bash
