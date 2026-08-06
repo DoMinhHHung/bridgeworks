@@ -14,30 +14,49 @@ cleanup() {
   rm -f "${container_logs}" "${response_headers}" "${response_body}"
 }
 
+fail() {
+  echo "$*" >&2
+  exit 1
+}
+
 trap cleanup EXIT
 
-bash -n \
-  "${context_dir}/scripts/cloud-run-entrypoint.sh" \
-  "${context_dir}/scripts/validate-cloud-run-image.sh"
+sh -n "${context_dir}/scripts/cloud-run-entrypoint.sh"
+bash -n "${context_dir}/scripts/validate-cloud-run-image.sh"
 
-test "$(tail -n 1 "${context_dir}/conf/apisix.cloud-run.yaml")" = "#END"
+test "$(tail -n 1 "${context_dir}/conf/apisix.cloud-run.yaml")" = "#END" ||
+  fail "apisix.cloud-run.yaml must end with #END"
 
 grep --quiet 'enable_admin: false' \
-  "${context_dir}/conf/config.cloud-run.yaml"
+  "${context_dir}/conf/config.cloud-run.yaml" ||
+  fail "APISIX Admin API must be disabled"
 grep --quiet 'enable_control: false' \
-  "${context_dir}/conf/config.cloud-run.yaml"
+  "${context_dir}/conf/config.cloud-run.yaml" ||
+  fail "APISIX Control API must be disabled"
 grep --quiet 'google-cloud-run-auth' \
-  "${context_dir}/conf/config.cloud-run.yaml"
+  "${context_dir}/conf/config.cloud-run.yaml" ||
+  fail "google-cloud-run-auth must be registered"
 grep --quiet 'X-Serverless-Authorization' \
-  "${context_dir}/custom/apisix/plugins/google-cloud-run-auth.lua"
+  "${context_dir}/custom/apisix/plugins/google-cloud-run-auth.lua" ||
+  fail "Cloud Run platform authorization header injection is missing"
+grep --quiet 'refresh_retry_seconds' \
+  "${context_dir}/custom/apisix/plugins/google-cloud-run-auth.lua" ||
+  fail "metadata token refresh backoff is missing"
+grep --quiet '@sha256:0e5377839f4ff5e322a5686ab6ce6797ba768008aca1bfc9b71149c3b326c4df' \
+  "${context_dir}/Dockerfile" ||
+  fail "APISIX base image digest is not pinned"
+
+test "$(grep -c '^[[:space:]]*retries: 0$' "${context_dir}/conf/apisix.cloud-run.yaml")" = "2" ||
+  fail "private Cloud Run upstream retries must be disabled"
+test "$(grep -c '^[[:space:]]*connect: 3$' "${context_dir}/conf/apisix.cloud-run.yaml")" = "2" ||
+  fail "private Cloud Run connect timeouts must be 3 seconds"
 
 if grep -Eqi \
   'BEGIN (RSA )?PRIVATE KEY|whsec_|postgres(ql)?://' \
   "${context_dir}/conf/apisix.cloud-run.yaml" \
   "${context_dir}/conf/config.cloud-run.yaml" \
   "${context_dir}/custom/apisix/plugins/google-cloud-run-auth.lua"; then
-  echo "Cloud Run APISIX source contains a secret-shaped value" >&2
-  exit 1
+  fail "Cloud Run APISIX source contains a secret-shaped value"
 fi
 
 docker build \
@@ -46,17 +65,38 @@ docker build \
   "${context_dir}"
 
 image_user="$(docker image inspect "${image_tag}" --format '{{.Config.User}}')"
-test "${image_user}" = "apisix"
+test "${image_user}" = "apisix" ||
+  fail "Cloud Run APISIX image must run as the apisix user"
 
 echo "cloud_run_image_non_root=true"
 
 if docker run --rm "${image_tag}" >"${container_logs}" 2>&1; then
-  echo "container unexpectedly started without required environment" >&2
-  exit 1
+  fail "container unexpectedly started without required environment"
 fi
 
-grep --quiet 'required environment variable is missing' "${container_logs}"
+grep --quiet 'required environment variable is missing' "${container_logs}" ||
+  fail "missing environment validation did not return the expected error"
 echo "required_environment_validation=true"
+
+: >"${container_logs}"
+
+if docker run \
+  --rm \
+  --env PORT=9080 \
+  --env IDENTITY_SERVICE_HOST=identity-service.example.run.app \
+  --env 'IDENTITY_SERVICE_AUDIENCE=https://identity service.example.run.app' \
+  --env ORGANIZATION_SERVICE_HOST=organization-service.example.run.app \
+  --env ORGANIZATION_SERVICE_AUDIENCE=https://organization-service.example.run.app \
+  --env CLERK_AUTHORIZED_PARTIES=http://localhost:3000,http://127.0.0.1:5173 \
+  "${image_tag}" \
+  >"${container_logs}" 2>&1; then
+  fail "container unexpectedly accepted a malformed Cloud Run audience"
+fi
+
+grep --quiet 'IDENTITY_SERVICE_AUDIENCE contains invalid hostname characters' \
+  "${container_logs}" ||
+  fail "malformed Cloud Run audience did not return the expected error"
+echo "cloud_run_audience_validation=true"
 
 : >"${container_logs}"
 
@@ -64,6 +104,7 @@ docker run \
   --detach \
   --name "${container_name}" \
   --publish 127.0.0.1::9080 \
+  --add-host metadata.google.internal:127.0.0.1 \
   --env PORT=9080 \
   --env IDENTITY_SERVICE_HOST=identity-service.example.run.app \
   --env IDENTITY_SERVICE_AUDIENCE=https://identity-service.example.run.app \
@@ -78,7 +119,8 @@ host_port="$(
     awk -F: 'NR == 1 {print $NF}'
 )"
 
-test -n "${host_port}"
+test -n "${host_port}" ||
+  fail "Docker did not publish the APISIX test port"
 
 ready=false
 for attempt in $(seq 1 60); do
@@ -86,7 +128,7 @@ for attempt in $(seq 1 60); do
     --format '{{.State.Running}}' |
     grep --quiet '^true$'; then
     docker logs "${container_name}" >&2 || true
-    exit 1
+    fail "APISIX test container stopped before becoming ready"
   fi
 
   status="$(
@@ -107,7 +149,8 @@ for attempt in $(seq 1 60); do
   sleep 1
 done
 
-test "${ready}" = "true"
+[[ "${ready}" == "true" ]] ||
+  fail "APISIX test container did not become ready"
 echo "cloud_run_apisix_started=true"
 
 request_id="apisix-cloud-run-ci-request-id"
@@ -123,41 +166,45 @@ curl \
   "http://127.0.0.1:${host_port}/healthz"
 
 grep --quiet --ignore-case "^X-Request-Id: ${request_id}" \
-  "${response_headers}"
-grep --quiet '"status":"ok"' "${response_body}"
-grep --quiet '"component":"apisix"' "${response_body}"
+  "${response_headers}" ||
+  fail "gateway health response did not preserve X-Request-Id"
+grep --quiet '"status":"ok"' "${response_body}" ||
+  fail "gateway health response status is invalid"
+grep --quiet '"component":"apisix"' "${response_body}" ||
+  fail "gateway health response component is invalid"
 
 echo "gateway_health_route_valid=true"
 
+test_clerk_token="clerk-token-must-not-be-logged"
 protected_status="$(
   curl \
     --silent \
     --show-error \
     --max-time 10 \
-    --header 'Authorization: Bearer clerk-token-must-not-be-logged' \
+    --header "Authorization: Bearer ${test_clerk_token}" \
     --output "${response_body}" \
     --write-out '%{http_code}' \
     "http://127.0.0.1:${host_port}/api/v1/identity/health/live"
 )"
 
-test "${protected_status}" = "503"
+[[ "${protected_status}" == "503" ]] ||
+  fail "protected route returned ${protected_status}, expected 503"
 grep --quiet '"code":"gateway_upstream_auth_unavailable"' \
-  "${response_body}"
+  "${response_body}" ||
+  fail "protected route did not return the stable fail-closed error code"
 
 echo "metadata_unavailable_failure_is_closed=true"
 
 docker logs "${container_name}" >"${container_logs}" 2>&1
 
-if grep -q 'clerk-token-must-not-be-logged' "${container_logs}"; then
-  echo "Authorization credential leaked into APISIX logs" >&2
-  exit 1
+if grep -q "${test_clerk_token}" "${container_logs}"; then
+  fail "Authorization credential leaked into APISIX logs"
 fi
 
 if grep -Eqi \
   'X-Serverless-Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' \
   "${container_logs}"; then
-  echo "Google identity token leaked into APISIX logs" >&2
-  exit 1
+  fail "Google identity token leaked into APISIX logs"
 fi
 
 echo "gateway_credentials_absent_from_logs=true"
