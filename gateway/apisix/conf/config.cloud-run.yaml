@@ -1,0 +1,41 @@
+apisix:
+  node_listen:
+    - port: 9080
+  enable_admin: false
+  enable_control: false
+  enable_dev_mode: false
+  enable_ipv6: false
+  enable_http2: true
+  enable_server_tokens: false
+  extra_lua_path: /usr/local/apisix/custom/?.lua
+  ssl:
+    enable: false
+
+nginx_config:
+  error_log: /dev/stderr
+  error_log_level: warn
+  worker_shutdown_timeout: 10s
+  http:
+    enable_access_log: true
+    access_log: /dev/stdout
+    access_log_format: |
+      {"timestamp":"$time_iso8601","remote_addr":"$remote_addr","request":"$request","status":"$status","body_bytes_sent":"$body_bytes_sent","request_time":"$request_time","upstream_addr":"$upstream_addr","upstream_status":"$upstream_status","upstream_response_time":"$upstream_response_time"}
+    access_log_format_escape: json
+    client_header_timeout: 10s
+    client_body_timeout: 15s
+    send_timeout: 15s
+    client_max_body_size: 5m
+    keepalive_timeout: 60s
+    proxy_ssl_server_name: true
+
+plugins:
+  - request-id
+  - mocking
+  - cors
+  - proxy-rewrite
+  - google-cloud-run-auth
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
