@@ -1,0 +1,215 @@
+upstreams:
+  - id: identity-cloud-run
+    name: identity-cloud-run
+    type: roundrobin
+    scheme: https
+    pass_host: node
+    retries: 0
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    keepalive_pool:
+      size: 64
+      idle_timeout: 60
+      requests: 1000
+    nodes:
+      - host: "${{IDENTITY_SERVICE_HOST}}"
+        port: 443
+        weight: 1
+
+  - id: organization-cloud-run
+    name: organization-cloud-run
+    type: roundrobin
+    scheme: https
+    pass_host: node
+    retries: 0
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    keepalive_pool:
+      size: 64
+      idle_timeout: 60
+      requests: 1000
+    nodes:
+      - host: "${{ORGANIZATION_SERVICE_HOST}}"
+        port: 443
+        weight: 1
+
+routes:
+  - id: bridgeworks-gateway-health
+    name: bridgeworks-gateway-health
+    uri: /healthz
+    methods: [GET]
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      mocking:
+        response_status: 200
+        content_type: application/json
+        response_example: '{"status":"ok","component":"apisix","project":"bridgeworks"}'
+        with_mock_header: true
+    upstream:
+      type: roundrobin
+      nodes:
+        "127.0.0.1:1": 1
+
+  - id: bridgeworks-identity-live
+    name: bridgeworks-identity-live
+    uri: /api/v1/identity/health/live
+    methods: [GET]
+    upstream_id: identity-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /health/live
+
+  - id: bridgeworks-identity-ready
+    name: bridgeworks-identity-ready
+    uri: /api/v1/identity/health/ready
+    methods: [GET]
+    upstream_id: identity-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /health/ready
+
+  - id: bridgeworks-identity-clerk-webhook
+    name: bridgeworks-identity-clerk-webhook
+    uri: /api/v1/identity/webhooks/clerk
+    methods: [POST]
+    upstream_id: identity-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /webhooks/clerk
+
+  - id: bridgeworks-identity-me
+    name: bridgeworks-identity-me
+    uri: /api/v1/me
+    methods: [GET, OPTIONS]
+    upstream_id: identity-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: GET,OPTIONS
+        allow_headers: Authorization,Content-Type,X-Request-Id
+        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
+        max_age: 600
+        allow_credential: false
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /me
+
+  - id: bridgeworks-organization-live
+    name: bridgeworks-organization-live
+    uri: /api/v1/organizations/health/live
+    methods: [GET]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /health/live
+
+  - id: bridgeworks-organization-ready
+    name: bridgeworks-organization-ready
+    uri: /api/v1/organizations/health/ready
+    methods: [GET]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /health/ready
+
+  - id: bridgeworks-organization-clerk-webhook
+    name: bridgeworks-organization-clerk-webhook
+    uri: /api/v1/organizations/webhooks/clerk
+    methods: [POST]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /webhooks/clerk
+
+  - id: bridgeworks-organization-current
+    name: bridgeworks-organization-current
+    uri: /api/v1/organizations/current
+    methods: [GET, OPTIONS]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: GET,OPTIONS
+        allow_headers: Authorization,Content-Type,X-Request-Id
+        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
+        max_age: 600
+        allow_credential: false
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /organizations/current
+
+  - id: bridgeworks-organization-current-membership
+    name: bridgeworks-organization-current-membership
+    uri: /api/v1/organizations/current/membership
+    methods: [GET, OPTIONS]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: GET,OPTIONS
+        allow_headers: Authorization,Content-Type,X-Request-Id
+        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
+        max_age: 600
+        allow_credential: false
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /organizations/current/membership
+#END
