@@ -23,7 +23,10 @@ func TestLoadValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.IdentityServiceURL != defaultIdentityServiceURL || cfg.IdentityRequestTimeout != 2*time.Second {
+	if cfg.IdentityServiceURL != defaultIdentityServiceURL ||
+		cfg.IdentityRequestTimeout != 2*time.Second ||
+		cfg.IdentityServiceAuthMode != IdentityServiceAuthModeNone ||
+		cfg.IdentityServiceAudience != "" {
 		t.Fatalf("identity defaults unexpected")
 	}
 	if cfg.DatabaseMaxConns != 5 || cfg.DatabaseMinConns != 0 {
@@ -60,6 +63,65 @@ func TestLoadRejectsAuthorizedPartyErrors(t *testing.T) {
 		}
 	}
 }
+func TestLoadIdentityServiceAuth(t *testing.T) {
+	env := validEnvironment()
+	env["IDENTITY_SERVICE_AUTH_MODE"] = "google-id-token"
+	env["IDENTITY_SERVICE_AUDIENCE"] = "https://identity-service.example.run.app"
+
+	cfg, err := load(lookup(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IdentityServiceAuthMode != IdentityServiceAuthModeGoogleIDToken {
+		t.Fatalf("auth mode = %q", cfg.IdentityServiceAuthMode)
+	}
+	if cfg.IdentityServiceAudience != "https://identity-service.example.run.app" {
+		t.Fatalf("audience = %q", cfg.IdentityServiceAudience)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{
+			name: "google mode without audience",
+			mutate: func(values map[string]string) {
+				values["IDENTITY_SERVICE_AUTH_MODE"] = "google-id-token"
+			},
+		},
+		{
+			name: "audience while auth disabled",
+			mutate: func(values map[string]string) {
+				values["IDENTITY_SERVICE_AUDIENCE"] = "https://identity-service.example.run.app"
+			},
+		},
+		{
+			name: "unknown auth mode",
+			mutate: func(values map[string]string) {
+				values["IDENTITY_SERVICE_AUTH_MODE"] = "static-token"
+			},
+		},
+		{
+			name: "audience with path",
+			mutate: func(values map[string]string) {
+				values["IDENTITY_SERVICE_AUTH_MODE"] = "google-id-token"
+				values["IDENTITY_SERVICE_AUDIENCE"] = "https://identity-service.example.run.app/me"
+			},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			values := validEnvironment()
+			testCase.mutate(values)
+
+			if _, err := load(lookup(values)); err == nil {
+				t.Fatal("expected configuration rejection")
+			}
+		})
+	}
+}
+
 func TestConfigErrorsDoNotEchoSecrets(t *testing.T) {
 	env := validEnvironment()
 	secret := "very-sensitive-webhook-secret"
