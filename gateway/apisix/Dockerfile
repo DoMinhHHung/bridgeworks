@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG APISIX_BASE_IMAGE=apache/apisix:3.17.0-debian
+ARG APISIX_BASE_IMAGE=apache/apisix:3.17.0-debian@sha256:0e5377839f4ff5e322a5686ab6ce6797ba768008aca1bfc9b71149c3b326c4df
 FROM ${APISIX_BASE_IMAGE}
 
 USER root
