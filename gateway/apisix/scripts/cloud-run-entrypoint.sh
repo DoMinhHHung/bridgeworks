@@ -1,25 +1,19 @@
 #!/bin/sh
 set -eu
 
-required_variables="
-IDENTITY_SERVICE_HOST
-IDENTITY_SERVICE_AUDIENCE
-ORGANIZATION_SERVICE_HOST
-ORGANIZATION_SERVICE_AUDIENCE
-CLERK_AUTHORIZED_PARTIES
-"
+require_non_empty() {
+  variable_name="$1"
+  variable_value="$2"
 
-for variable_name in $required_variables; do
-  eval "variable_value=\${$variable_name:-}"
   if [ -z "$variable_value" ]; then
     echo "required environment variable is missing: $variable_name" >&2
     exit 1
   fi
-done
+}
 
 validate_run_app_host() {
   variable_name="$1"
-  eval "variable_value=\${$variable_name}"
+  variable_value="$2"
 
   case "$variable_value" in
     *.run.app) ;;
@@ -39,7 +33,7 @@ validate_run_app_host() {
 
 validate_run_app_audience() {
   variable_name="$1"
-  eval "variable_value=\${$variable_name}"
+  variable_value="$2"
 
   case "$variable_value" in
     https://*.run.app) ;;
@@ -55,13 +49,23 @@ validate_run_app_audience() {
       echo "$variable_name must not contain a path, query, or fragment" >&2
       exit 1
       ;;
+    *[!A-Za-z0-9.-]*)
+      echo "$variable_name contains invalid hostname characters" >&2
+      exit 1
+      ;;
   esac
 }
 
-validate_run_app_host IDENTITY_SERVICE_HOST
-validate_run_app_host ORGANIZATION_SERVICE_HOST
-validate_run_app_audience IDENTITY_SERVICE_AUDIENCE
-validate_run_app_audience ORGANIZATION_SERVICE_AUDIENCE
+require_non_empty IDENTITY_SERVICE_HOST "${IDENTITY_SERVICE_HOST:-}"
+require_non_empty IDENTITY_SERVICE_AUDIENCE "${IDENTITY_SERVICE_AUDIENCE:-}"
+require_non_empty ORGANIZATION_SERVICE_HOST "${ORGANIZATION_SERVICE_HOST:-}"
+require_non_empty ORGANIZATION_SERVICE_AUDIENCE "${ORGANIZATION_SERVICE_AUDIENCE:-}"
+require_non_empty CLERK_AUTHORIZED_PARTIES "${CLERK_AUTHORIZED_PARTIES:-}"
+
+validate_run_app_host IDENTITY_SERVICE_HOST "$IDENTITY_SERVICE_HOST"
+validate_run_app_host ORGANIZATION_SERVICE_HOST "$ORGANIZATION_SERVICE_HOST"
+validate_run_app_audience IDENTITY_SERVICE_AUDIENCE "$IDENTITY_SERVICE_AUDIENCE"
+validate_run_app_audience ORGANIZATION_SERVICE_AUDIENCE "$ORGANIZATION_SERVICE_AUDIENCE"
 
 if [ "${PORT:-9080}" != "9080" ]; then
   echo "Cloud Run container port must be configured as 9080" >&2
