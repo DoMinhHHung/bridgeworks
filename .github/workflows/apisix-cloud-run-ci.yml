@@ -1,0 +1,49 @@
+name: APISIX Cloud Run CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - gateway/apisix/Dockerfile
+      - gateway/apisix/.dockerignore
+      - gateway/apisix/conf/config.cloud-run.yaml
+      - gateway/apisix/conf/apisix.cloud-run.yaml
+      - gateway/apisix/custom/**
+      - gateway/apisix/scripts/cloud-run-entrypoint.sh
+      - gateway/apisix/scripts/validate-cloud-run-image.sh
+      - .github/workflows/apisix-cloud-run-ci.yml
+      - Makefile
+  pull_request:
+    paths:
+      - gateway/apisix/Dockerfile
+      - gateway/apisix/.dockerignore
+      - gateway/apisix/conf/config.cloud-run.yaml
+      - gateway/apisix/conf/apisix.cloud-run.yaml
+      - gateway/apisix/custom/**
+      - gateway/apisix/scripts/cloud-run-entrypoint.sh
+      - gateway/apisix/scripts/validate-cloud-run-image.sh
+      - .github/workflows/apisix-cloud-run-ci.yml
+      - Makefile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apisix-cloud-run-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build and validate Cloud Run gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate APISIX Cloud Run image
+        shell: bash
+        run: bash gateway/apisix/scripts/validate-cloud-run-image.sh
