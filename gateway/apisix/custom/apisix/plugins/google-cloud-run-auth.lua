@@ -29,6 +29,12 @@ local schema = {
             maximum = 600,
             default = 300,
         },
+        refresh_retry_seconds = {
+            type = "integer",
+            minimum = 1,
+            maximum = 60,
+            default = 10,
+        },
     },
     required = {"audience"},
     additionalProperties = false,
@@ -145,10 +151,23 @@ end
 local function cached_identity_token(conf)
     local now = ngx.time()
     local refresh_skew_seconds = conf.refresh_skew_seconds or 300
+    local refresh_retry_seconds = conf.refresh_retry_seconds or 10
     local cached = token_cache[conf.audience]
 
-    if cached and cached.expiration - refresh_skew_seconds > now then
+    if cached
+        and cached.token
+        and cached.expiration - refresh_skew_seconds > now
+    then
         return cached.token
+    end
+
+    if cached and cached.retry_after and cached.retry_after > now then
+        if cached.token and cached.expiration > now + 15 then
+            return cached.token
+        end
+
+        return nil, cached.error
+            or "metadata token refresh is backing off after a recent failure"
     end
 
     local token, expiration, fetch_error = fetch_identity_token(conf)
@@ -160,14 +179,25 @@ local function cached_identity_token(conf)
         return token
     end
 
-    if cached and cached.expiration > now + 15 then
+    local retry_after = now + refresh_retry_seconds
+
+    if cached and cached.token and cached.expiration > now + 15 then
+        cached.retry_after = math.min(retry_after, cached.expiration - 15)
+        cached.error = fetch_error
+
         core.log.warn(
             "failed to refresh Google Cloud Run identity token; using cached token",
             ", audience=", conf.audience,
+            ", retry_after=", cached.retry_after,
             ", error=", fetch_error
         )
         return cached.token
     end
+
+    token_cache[conf.audience] = {
+        retry_after = retry_after,
+        error = fetch_error,
+    }
 
     return nil, fetch_error
 end
