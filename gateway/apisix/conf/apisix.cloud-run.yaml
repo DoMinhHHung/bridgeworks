@@ -4,9 +4,9 @@ upstreams:
     type: roundrobin
     scheme: https
     pass_host: node
-    retries: 1
+    retries: 0
     timeout:
-      connect: 1
+      connect: 3
       send: 10
       read: 10
     keepalive_pool:
@@ -23,9 +23,9 @@ upstreams:
     type: roundrobin
     scheme: https
     pass_host: node
-    retries: 1
+    retries: 0
     timeout:
-      connect: 1
+      connect: 3
       send: 10
       read: 10
     keepalive_pool:
