@@ -84,7 +84,28 @@ func run() error {
 		return err
 	}
 
-	identity, err := identityclient.New(cfg.IdentityServiceURL, cfg.IdentityRequestTimeout)
+	identityOptions := make([]identityclient.Option, 0, 1)
+	switch cfg.IdentityServiceAuthMode {
+	case config.IdentityServiceAuthModeNone:
+	case config.IdentityServiceAuthModeGoogleIDToken:
+		identityOptions = append(
+			identityOptions,
+			identityclient.WithGoogleIDTokenAudience(
+				cfg.IdentityServiceAudience,
+			),
+		)
+	default:
+		return fmt.Errorf(
+			"unsupported Identity Service auth mode: %s",
+			cfg.IdentityServiceAuthMode,
+		)
+	}
+
+	identity, err := identityclient.New(
+		cfg.IdentityServiceURL,
+		cfg.IdentityRequestTimeout,
+		identityOptions...,
+	)
 	if err != nil {
 		return err
 	}

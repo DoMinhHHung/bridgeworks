@@ -4,35 +4,39 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 )
 
 const (
-	defaultServiceName               = "organization-service"
-	defaultHTTPAddr                  = ":8080"
-	defaultReadHeaderTimeout         = 5 * time.Second
-	defaultReadTimeout               = 15 * time.Second
-	defaultWriteTimeout              = 15 * time.Second
-	defaultIdleTimeout               = 60 * time.Second
-	defaultShutdownTimeout           = 10 * time.Second
-	defaultLogLevel                  = "info"
-	defaultDatabaseConnectTimeout    = 5 * time.Second
-	defaultDatabaseReadinessTimeout  = 2 * time.Second
-	defaultDatabaseMaxConns          = int32(5)
-	defaultDatabaseMinConns          = int32(0)
-	defaultDatabaseMaxConnLifetime   = 30 * time.Minute
-	defaultDatabaseMaxConnIdleTime   = 5 * time.Minute
-	defaultDatabaseHealthCheckPeriod = time.Minute
-	defaultWebhookProcessTimeout     = 5 * time.Second
-	maximumWebhookProcessTimeout     = 8 * time.Second
-	defaultWebhookMaxBodyBytes       = int64(1_048_576)
-	maximumWebhookMaxBodyBytes       = int64(5 * 1024 * 1024)
-	defaultClerkAuthLeeway           = 5 * time.Second
-	maximumClerkAuthLeeway           = 30 * time.Second
-	defaultIdentityServiceURL        = "http://identity-service:8080"
-	defaultIdentityRequestTimeout    = 2 * time.Second
-	maximumIdentityRequestTimeout    = 5 * time.Second
-	defaultMigrationTimeout          = time.Minute
+	defaultServiceName                   = "organization-service"
+	defaultHTTPAddr                      = ":8080"
+	defaultReadHeaderTimeout             = 5 * time.Second
+	defaultReadTimeout                   = 15 * time.Second
+	defaultWriteTimeout                  = 15 * time.Second
+	defaultIdleTimeout                   = 60 * time.Second
+	defaultShutdownTimeout               = 10 * time.Second
+	defaultLogLevel                      = "info"
+	defaultDatabaseConnectTimeout        = 5 * time.Second
+	defaultDatabaseReadinessTimeout      = 2 * time.Second
+	defaultDatabaseMaxConns              = int32(5)
+	defaultDatabaseMinConns              = int32(0)
+	defaultDatabaseMaxConnLifetime       = 30 * time.Minute
+	defaultDatabaseMaxConnIdleTime       = 5 * time.Minute
+	defaultDatabaseHealthCheckPeriod     = time.Minute
+	defaultWebhookProcessTimeout         = 5 * time.Second
+	maximumWebhookProcessTimeout         = 8 * time.Second
+	defaultWebhookMaxBodyBytes           = int64(1_048_576)
+	maximumWebhookMaxBodyBytes           = int64(5 * 1024 * 1024)
+	defaultClerkAuthLeeway               = 5 * time.Second
+	maximumClerkAuthLeeway               = 30 * time.Second
+	defaultIdentityServiceURL            = "http://identity-service:8080"
+	defaultIdentityServiceAuthMode       = "none"
+	IdentityServiceAuthModeNone          = "none"
+	IdentityServiceAuthModeGoogleIDToken = "google-id-token"
+	defaultIdentityRequestTimeout        = 2 * time.Second
+	maximumIdentityRequestTimeout        = 5 * time.Second
+	defaultMigrationTimeout              = time.Minute
 )
 
 type Config struct {
@@ -63,8 +67,10 @@ type Config struct {
 	WebhookProcessTimeout time.Duration
 	WebhookMaxBodyBytes   int64
 
-	IdentityServiceURL     string
-	IdentityRequestTimeout time.Duration
+	IdentityServiceURL      string
+	IdentityServiceAuthMode string
+	IdentityServiceAudience string
+	IdentityRequestTimeout  time.Duration
 }
 
 type MigrationConfig struct {
@@ -205,6 +211,39 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		return Config{}, fmt.Errorf("IDENTITY_SERVICE_REQUEST_TIMEOUT must be less than or equal to %s", maximumIdentityRequestTimeout)
 	}
 
+	identityServiceAuthMode, err := nonEmptyValue(
+		lookup,
+		"IDENTITY_SERVICE_AUTH_MODE",
+		defaultIdentityServiceAuthMode,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	identityServiceAuthMode = strings.ToLower(identityServiceAuthMode)
+
+	identityServiceAudience := ""
+	switch identityServiceAuthMode {
+	case IdentityServiceAuthModeNone:
+		if rawAudience, ok := lookup("IDENTITY_SERVICE_AUDIENCE"); ok &&
+			strings.TrimSpace(rawAudience) != "" {
+			return Config{}, fmt.Errorf(
+				"IDENTITY_SERVICE_AUDIENCE requires IDENTITY_SERVICE_AUTH_MODE=google-id-token",
+			)
+		}
+	case IdentityServiceAuthModeGoogleIDToken:
+		identityServiceAudience, err = originValue(
+			lookup,
+			"IDENTITY_SERVICE_AUDIENCE",
+		)
+		if err != nil {
+			return Config{}, err
+		}
+	default:
+		return Config{}, fmt.Errorf(
+			"IDENTITY_SERVICE_AUTH_MODE must be one of none, google-id-token",
+		)
+	}
+
 	return Config{
 		ServiceName: serviceName, HTTPAddr: httpAddr,
 		ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout,
@@ -217,8 +256,11 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		ClerkJWTKey: clerkJWTKey, ClerkIssuer: clerkIssuer,
 		ClerkAuthorizedParties: clerkAuthorizedParties, ClerkAuthLeeway: clerkAuthLeeway,
 		WebhookSigningSecret: webhookSigningSecret, WebhookProcessTimeout: webhookProcessTimeout,
-		WebhookMaxBodyBytes: webhookMaxBodyBytes,
-		IdentityServiceURL:  identityServiceURL, IdentityRequestTimeout: identityRequestTimeout,
+		WebhookMaxBodyBytes:     webhookMaxBodyBytes,
+		IdentityServiceURL:      identityServiceURL,
+		IdentityServiceAuthMode: identityServiceAuthMode,
+		IdentityServiceAudience: identityServiceAudience,
+		IdentityRequestTimeout:  identityRequestTimeout,
 	}, nil
 }
 

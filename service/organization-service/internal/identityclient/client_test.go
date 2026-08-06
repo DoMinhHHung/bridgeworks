@@ -118,3 +118,112 @@ func TestResolveTimeout(t *testing.T) {
 		t.Fatal("expected timeout")
 	}
 }
+
+type testPlatformTokenProvider struct {
+	token string
+	err   error
+}
+
+func (p testPlatformTokenProvider) Token(
+	_ context.Context,
+) (string, error) {
+	return p.token, p.err
+}
+
+func TestResolveForwardsCloudRunAndClerkTokensSeparately(
+	t *testing.T,
+) {
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "Bearer clerk-token" {
+				t.Fatalf("Authorization = %q", got)
+			}
+			if got := r.Header.Get(
+				"X-Serverless-Authorization",
+			); got != "Bearer google-id-token" {
+				t.Fatalf("X-Serverless-Authorization = %q", got)
+			}
+			if got := r.Header.Get("X-Request-Id"); got != "request-cloud-run" {
+				t.Fatalf("X-Request-Id = %q", got)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(
+				[]byte(
+					`{"id":"0198f3be-bf6f-7b0a-8a25-f8433567e0c1"}`,
+				),
+			)
+		}),
+	)
+	defer server.Close()
+
+	client, err := New(
+		server.URL,
+		time.Second,
+		withPlatformTokenProvider(
+			testPlatformTokenProvider{
+				token: "google-id-token",
+			},
+		),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	identity, err := client.Resolve(
+		context.Background(),
+		"Bearer clerk-token",
+		"request-cloud-run",
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if identity.ID.String() != "0198f3be-bf6f-7b0a-8a25-f8433567e0c1" {
+		t.Fatalf("identity ID = %s", identity.ID)
+	}
+}
+
+func TestResolveDoesNotCallIdentityWhenPlatformTokenFails(
+	t *testing.T,
+) {
+	upstreamCalled := make(chan struct{}, 1)
+
+	server := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			upstreamCalled <- struct{}{}
+			w.WriteHeader(http.StatusInternalServerError)
+		}),
+	)
+	defer server.Close()
+
+	client, err := New(
+		server.URL,
+		time.Second,
+		withPlatformTokenProvider(
+			testPlatformTokenProvider{
+				err: errors.New("metadata unavailable"),
+			},
+		),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = client.Resolve(
+		context.Background(),
+		"Bearer sensitive-clerk-token",
+		"request-platform-failure",
+	)
+	if err == nil {
+		t.Fatal("expected platform token error")
+	}
+	if strings.Contains(err.Error(), "sensitive-clerk-token") {
+		t.Fatal("platform token error leaked Clerk token")
+	}
+
+	select {
+	case <-upstreamCalled:
+		t.Fatal("Identity upstream was called after platform token failure")
+	default:
+	}
+}
