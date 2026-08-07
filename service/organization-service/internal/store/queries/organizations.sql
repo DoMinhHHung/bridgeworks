@@ -1,14 +1,16 @@
 -- name: GetOrganizationByClerkID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+       business_email_domain, business_email_verified_at, business_email_verified_by_user_id
 FROM organization.organizations
 WHERE clerk_organization_id = $1;
 
 -- name: LockOrganizationByID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+       business_email_domain, business_email_verified_at, business_email_verified_by_user_id
 FROM organization.organizations
 WHERE id = $1
 FOR UPDATE;
@@ -19,7 +21,8 @@ INSERT INTO organization.organizations (
 ) VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+          business_email_domain, business_email_verified_at, business_email_verified_by_user_id;
 
 -- name: UpdateOrganizationProjection :exec
 UPDATE organization.organizations
@@ -35,7 +38,8 @@ WHERE clerk_organization_id = $1
   AND clerk_created_by_user_id IS NULL
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+          business_email_domain, business_email_verified_at, business_email_verified_by_user_id;
 
 -- name: DisableOrganizationOwnerBootstrapEligibility :exec
 UPDATE organization.organizations
@@ -62,7 +66,8 @@ SET legal_name = $2,
 WHERE id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+          business_email_domain, business_email_verified_at, business_email_verified_by_user_id;
 
 -- name: UpdateOrganizationVerificationStatus :one
 UPDATE organization.organizations
@@ -70,7 +75,16 @@ SET verification_status = $2
 WHERE id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+          business_email_domain, business_email_verified_at, business_email_verified_by_user_id;
+
+-- name: UpdateOrganizationBusinessEmailVerification :exec
+UPDATE organization.organizations
+SET business_email_domain = $2,
+    business_email_verified_at = $3,
+    business_email_verified_by_user_id = $4
+WHERE id = $1
+  AND status = 'active';
 
 -- name: MarkOrganizationDeleted :one
 UPDATE organization.organizations
@@ -80,4 +94,5 @@ SET name = NULL,
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible,
+          business_email_domain, business_email_verified_at, business_email_verified_by_user_id;
