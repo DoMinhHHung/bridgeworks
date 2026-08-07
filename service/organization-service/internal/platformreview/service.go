@@ -24,12 +24,12 @@ const (
 )
 
 var (
-	ErrInvalidDecision       = errors.New("invalid verification decision")
-	ErrInvalidCursor         = errors.New("invalid verification queue cursor")
-	ErrOrganizationNotFound  = errors.New("organization not found")
+	ErrInvalidDecision           = errors.New("invalid verification decision")
+	ErrInvalidCursor             = errors.New("invalid verification queue cursor")
+	ErrOrganizationNotFound      = errors.New("organization not found")
 	ErrOrganizationNotReviewable = errors.New("organization is not reviewable")
-	ErrVerificationNotPending = errors.New("verification is not pending")
-	ErrDecisionConflict      = errors.New("verification decision conflict")
+	ErrVerificationNotPending    = errors.New("verification is not pending")
+	ErrDecisionConflict          = errors.New("verification decision conflict")
 )
 
 type IdentityReader interface {
