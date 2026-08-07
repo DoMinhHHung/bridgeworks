@@ -1,5 +1,9 @@
 -- +goose Up
 
+-- Forward-only migration: intentionally no -- +goose Down section. Removing these
+-- columns or catalog rows would discard BridgeWorks-owned organization state and can
+-- invalidate existing memberships.
+
 alter table organization.organizations
     add column legal_name text,
     add column website text,
@@ -55,8 +59,3 @@ revoke all privileges on table organization.permissions from public;
 revoke all privileges on table organization.role_permissions from public;
 revoke all privileges on table organization.memberships from public;
 revoke all privileges on table organization.clerk_webhook_events from public;
-
--- +goose Down
-
--- Intentionally forward-only. Dropping these columns or catalog rows would discard
--- BridgeWorks-owned organization state and can invalidate existing memberships.
