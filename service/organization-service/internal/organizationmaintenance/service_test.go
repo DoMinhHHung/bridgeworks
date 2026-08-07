@@ -43,13 +43,13 @@ func (f *fakePresenceProvider) MembershipExists(context.Context, string, string)
 }
 
 type fakeMaintenanceUOW struct {
-	found       bool
-	marked      int
-	deleted     bool
-	audits      []organizationaudit.Event
-	commits     int
-	rollbacks   int
-	sequence    []string
+	found     bool
+	marked    int
+	deleted   bool
+	audits    []organizationaudit.Event
+	commits   int
+	rollbacks int
+	sequence  []string
 }
 
 func (u *fakeMaintenanceUOW) AcquireOrganizationLock(context.Context, uuid.UUID) error {
