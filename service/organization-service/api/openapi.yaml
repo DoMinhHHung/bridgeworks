@@ -56,7 +56,13 @@ paths:
         "503": { $ref: "#/components/responses/PublicServiceUnavailable" }
 
   /api/v1/organizations/current:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     get:
       summary: Return the current active local organization projection
       operationId: getCurrentOrganization
@@ -103,7 +109,13 @@ paths:
         "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
 
   /api/v1/organizations/current/verification:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     post:
       summary: Request BridgeWorks company verification
       operationId: requestCurrentOrganizationVerification
@@ -146,7 +158,13 @@ paths:
         "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
 
   /api/v1/organizations/current/business-email-verification:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     post:
       summary: Record a point-in-time verified business-email domain proof
       operationId: verifyCurrentOrganizationBusinessEmail
@@ -200,7 +218,13 @@ paths:
         "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
 
   /api/v1/organizations/current/membership:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     get:
       summary: Return the actor's local effective membership authorization
       operationId: getCurrentOrganizationMembership
@@ -240,7 +264,13 @@ paths:
         "503": { $ref: "#/components/responses/MembershipProviderUnavailable" }
 
   /api/v1/organizations/current/invitations:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     post:
       summary: Create a Clerk organization invitation with local role intent
       operationId: createCurrentOrganizationInvitation
@@ -291,7 +321,13 @@ paths:
         "503": { $ref: "#/components/responses/MembershipProviderUnavailable" }
 
   /api/v1/organizations/current/members/{membershipID}/role:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     parameters:
       - $ref: "#/components/parameters/MembershipID"
     patch:
@@ -323,7 +359,13 @@ paths:
         "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
 
   /api/v1/organizations/current/members/{membershipID}:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     parameters:
       - $ref: "#/components/parameters/MembershipID"
     delete:
@@ -349,7 +391,13 @@ paths:
         "503": { $ref: "#/components/responses/MembershipProviderUnavailable" }
 
   /api/v1/organizations/current/ownership-transfer:
-    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    options:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "200":
+          description: Preflight accepted for a configured origin
+        "204":
+          description: Preflight accepted without a response body
     post:
       summary: Atomically transfer ownership to an active same-organization membership
       operationId: transferCurrentOrganizationOwnership
@@ -379,13 +427,6 @@ paths:
         "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
 
 components:
-  pathItems:
-    CorsPreflight:
-      summary: Browser CORS preflight handled at the APISIX edge
-      responses:
-        "204":
-          description: Preflight accepted for a configured origin
-
   securitySchemes:
     ClerkSessionToken:
       type: http
