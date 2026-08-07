@@ -19,11 +19,21 @@ Example deployment flags:
 
 ```text
 --port=9080
---allow-unauthenticated
+--no-invoker-iam-check
 --service-account=apisix-runtime@PROJECT_ID.iam.gserviceaccount.com
 ```
 
 The APISIX runtime service account must have `roles/run.invoker` only on the private Identity and Organization services. Do not create or mount a service-account key.
+
+## Public gateway health
+
+The production gateway health route is:
+
+```text
+GET /health/live
+```
+
+Do not use `/healthz` for the Cloud Run deployment. Cloud Run reserves some URL paths ending in `z` and recommends avoiding paths that end in `z`; those requests can return `404` before they reach the APISIX container.
 
 ## Authentication headers
 
@@ -53,4 +63,4 @@ Run:
 bash gateway/apisix/scripts/validate-cloud-run-image.sh
 ```
 
-The validation builds the image, verifies non-root execution and pinned dependencies, checks startup configuration, isolates the container from the metadata server, confirms fail-closed behavior, and scans logs for credential leakage.
+The validation builds the image, verifies non-root execution and pinned dependencies, checks startup configuration, rejects production route paths ending in `z`, isolates the container from the metadata server, confirms fail-closed behavior, and scans logs for credential leakage.

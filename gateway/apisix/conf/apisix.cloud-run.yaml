@@ -40,7 +40,7 @@ upstreams:
 routes:
   - id: bridgeworks-gateway-health
     name: bridgeworks-gateway-health
-    uri: /healthz
+    uri: /health/live
     methods: [GET]
     plugins:
       request-id:
