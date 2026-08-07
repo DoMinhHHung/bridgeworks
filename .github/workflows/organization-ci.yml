@@ -60,8 +60,9 @@ jobs:
             service/identity-service/migrations/000001_create_app_users.sql \
             service/organization-service/migrations/000001_create_organization_foundation.sql \
             service/organization-service/migrations/000002_complete_organization_domain.sql \
-            service/organization-service/migrations/000003_add_owner_bootstrap_state.sql
-          test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
+            service/organization-service/migrations/000003_add_owner_bootstrap_state.sql \
+            service/organization-service/migrations/000004_add_membership_administration.sql
+          test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "2"
           test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "4"
 
       - name: Verify Organization application boundary
@@ -101,7 +102,13 @@ jobs:
           ! grep -E 'legal_name|website|country|company_type|verification_status|trust_status|application_role|business_email' <<< "${projection_sql}"
           ! grep -R --line-number --fixed-strings 'POST /api/v1/organizations' service/organization-service/internal
           ! grep -R --line-number --ignore-case 'clerk.*secret' service/organization-service/internal/organizationonboarding
-          ! grep -R --line-number -E 'platform_admin|X-Platform-Admin|admin.*allowlist' service/organization-service/internal
+          ! grep -R --line-number -E 'X-Platform-Admin|admin.*allowlist' service/organization-service/internal
+          ! grep -R --line-number --fixed-strings 'platform_admin' \
+            service/organization-service/internal/authorization \
+            service/organization-service/internal/currentorganization \
+            service/organization-service/internal/membershipadmin
+          grep --quiet 'ResolvePlatformAccess' service/organization-service/internal/identityclient/platform_access.go
+          grep --quiet 'PermissionOrganizationVerificationReview' service/organization-service/internal/platformauthorization/service.go
 
       - name: Validate Organization Go module
         shell: bash
