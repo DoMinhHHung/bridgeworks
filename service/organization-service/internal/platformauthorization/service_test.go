@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authorization"
+	"github.com/google/uuid"
 )
 
 type readerStub struct {
@@ -15,22 +18,60 @@ func (r readerStub) ResolvePlatformAccess(context.Context, string, string) (Acce
 	return r.access, r.err
 }
 
-func TestOrdinaryAndTenantPrivilegedUsersDoNotGainPlatformPermission(t *testing.T) {
+func TestOrdinaryUserWithoutLocalAssignmentHasNoPlatformPermission(t *testing.T) {
 	t.Parallel()
 
-	for _, identityContext := range []string{"ordinary user", "tenant owner", "tenant admin", "Clerk org:admin"} {
-		t.Run(identityContext, func(t *testing.T) {
+	access, err := New(readerStub{access: Access{Roles: []string{}, Permissions: []string{}}}).Resolve(
+		context.Background(),
+		"Bearer ordinary-session",
+		"request-ordinary-isolation",
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if err := RequirePermission(access, PermissionOrganizationVerificationReview); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("RequirePermission() error = %v", err)
+	}
+}
+
+func TestTenantOwnerAndAdminAuthorityCannotBecomePlatformAuthority(t *testing.T) {
+	t.Parallel()
+
+	allTenantPermissions := []string{
+		authorization.PermissionOrganizationRead,
+		authorization.PermissionOrganizationManage,
+		authorization.PermissionOrganizationVerifyRequest,
+		authorization.PermissionMembershipRead,
+		authorization.PermissionMembershipInvite,
+		authorization.PermissionMembershipManage,
+		authorization.PermissionMembershipRoleManage,
+	}
+	for _, role := range []string{"owner", "admin"} {
+		role := role
+		t.Run(role, func(t *testing.T) {
 			t.Parallel()
+
+			tenantActor := authorization.NewActorContext(
+				uuid.New(),
+				uuid.New(),
+				uuid.New(),
+				role,
+				allTenantPermissions,
+			)
+			if tenantActor.HasPermission(PermissionOrganizationVerificationReview) {
+				t.Fatalf("tenant %s unexpectedly has global review permission", role)
+			}
+
 			access, err := New(readerStub{access: Access{Roles: []string{}, Permissions: []string{}}}).Resolve(
 				context.Background(),
-				"Bearer same-valid-session",
+				"Bearer tenant-session",
 				"request-tenant-isolation",
 			)
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
 			if err := RequirePermission(access, PermissionOrganizationVerificationReview); !errors.Is(err, ErrPermissionDenied) {
-				t.Fatalf("RequirePermission() error = %v", err)
+				t.Fatalf("tenant %s RequirePermission() error = %v", role, err)
 			}
 		})
 	}
