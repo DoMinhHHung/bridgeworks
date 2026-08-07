@@ -65,6 +65,7 @@ func TestPatchCurrentOrganizationUsesResolvedLocalActor(t *testing.T) {
 	}}
 
 	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader(`{"legal_name":" BridgeWorks Ltd ","country":"vn"}`))
+	request.Body = ioNopCloserString(`{"legal_name":" BridgeWorks Ltd ","country":"vn"}`)
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -93,7 +94,8 @@ func TestPatchCurrentOrganizationRejectsUnknownFieldsBeforeMutation(t *testing.T
 	actor := authorization.NewActorContext(uuid.New(), organizationID, uuid.New(), "admin", []string{authorization.PermissionOrganizationManage})
 	resolver := onboardingResolverStub{result: currentorganization.Result{Actor: actor}}
 	stub := &onboardingStub{}
-	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader(`{"verification_status":"verified"}`))
+	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", nil)
+	request.Body = ioNopCloserString(`{"verification_status":"verified"}`)
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -116,7 +118,8 @@ func TestRequestVerificationMapsTransitionConflict(t *testing.T) {
 	actor := authorization.NewActorContext(uuid.New(), organizationID, uuid.New(), "owner", []string{authorization.PermissionOrganizationVerifyRequest})
 	resolver := onboardingResolverStub{result: currentorganization.Result{Actor: actor}}
 	stub := &onboardingStub{verifyErr: organizationonboarding.ErrVerificationTransitionNotAllowed}
-	request := httptest.NewRequest(http.MethodPost, "/organizations/current/verification", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "/organizations/current/verification", nil)
+	request.Body = ioNopCloserString(`{}`)
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -134,7 +137,8 @@ func TestRequestVerificationMapsTransitionConflict(t *testing.T) {
 func TestPatchCurrentOrganizationPreservesNotReadyContract(t *testing.T) {
 	resolver := onboardingResolverStub{err: currentorganization.ErrOrganizationNotReady}
 	stub := &onboardingStub{}
-	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader(`{"country":"VN"}`))
+	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", nil)
+	request.Body = ioNopCloserString(`{"country":"VN"}`)
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -172,3 +176,11 @@ func TestOnboardingErrorDoesNotExposeRawErrors(t *testing.T) {
 		t.Fatalf("raw error leaked: %s", recorder.Body.String())
 	}
 }
+
+func ioNopCloserString(value string) *readCloser {
+	return &readCloser{Reader: strings.NewReader(strings.ReplaceAll(value, `\"`, `"`))}
+}
+
+type readCloser struct{ *strings.Reader }
+
+func (r *readCloser) Close() error { return nil }
