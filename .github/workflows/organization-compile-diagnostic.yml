@@ -15,7 +15,7 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
-      - name: Print bounded vet and test failures
+      - name: Print compiler and test failures only
         shell: bash
         run: |
           set +e
@@ -24,10 +24,10 @@ jobs:
           vet_status=$?
           go test ./... > /tmp/test.log 2>&1
           test_status=$?
-          echo '--- go vet tail ---'
-          tail -n 120 /tmp/vet.log
-          echo '--- go test tail ---'
-          tail -n 180 /tmp/test.log
+          echo '--- filtered go vet ---'
+          grep -E '(^# |\.go:[0-9]+:|undefined|does not implement|cannot use|too many arguments|not enough arguments|FAIL)' /tmp/vet.log | head -n 120 || true
+          echo '--- filtered go test ---'
+          grep -E '(^# |\.go:[0-9]+:|undefined|does not implement|cannot use|too many arguments|not enough arguments|--- FAIL:|FAIL)' /tmp/test.log | head -n 160 || true
           if [[ ${vet_status} -ne 0 || ${test_status} -ne 0 ]]; then
             exit 1
           fi
