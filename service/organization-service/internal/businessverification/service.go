@@ -168,7 +168,7 @@ func normalizeDomain(raw string) (string, error) {
 			return "", ErrInvalidBusinessEmail
 		}
 		for _, r := range label {
-			if r > unicode.MaxASCII || !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			if r > unicode.MaxASCII || (r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9')) {
 				return "", ErrInvalidBusinessEmail
 			}
 		}
