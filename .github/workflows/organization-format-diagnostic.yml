@@ -5,30 +5,39 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  gofmt-diff:
+  gofmt-correction:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feat/organization-membership-administration'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: feat/organization-membership-administration
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.5'
           cache: false
-      - name: Print gofmt diffs
+      - name: Apply gofmt only
         shell: bash
         run: |
           set -euo pipefail
           cd service/organization-service
-          unformatted="$(find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
-          if [[ -z "${unformatted}" ]]; then
+          find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -w
+          cd ../..
+          changed="$(git diff --name-only)"
+          if [[ -z "${changed}" ]]; then
             echo "All Go files are formatted."
             exit 0
           fi
-          printf 'Unformatted Go files:\n%s\n' "${unformatted}"
-          while IFS= read -r file; do
-            [[ -z "${file}" ]] && continue
-            gofmt -d "${file}" || true
-          done <<< "${unformatted}"
-          exit 1
+          if grep -v '^service/organization-service/.*\.go$' <<< "${changed}"; then
+            echo "gofmt changed a file outside Organization Go sources" >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add service/organization-service
+          git commit -m 'chore(organization): apply gofmt'
+          git push origin HEAD:feat/organization-membership-administration
