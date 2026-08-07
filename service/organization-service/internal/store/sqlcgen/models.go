@@ -31,21 +31,35 @@ type OrganizationMembership struct {
 	UpdatedAt         pgtype.Timestamptz
 }
 
+type OrganizationMembershipInvitationIntent struct {
+	ID                      uuid.UUID
+	OrganizationID          uuid.UUID
+	ApplicationRole         string
+	CreatedByIdentityUserID uuid.UUID
+	ConsumedMembershipID    *uuid.UUID
+	ConsumedAt              pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+}
+
 type OrganizationOrganization struct {
-	ID                     uuid.UUID
-	ClerkOrganizationID    string
-	Name                   *string
-	Slug                   *string
-	Status                 string
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
-	LegalName              *string
-	Website                *string
-	Country                *string
-	CompanyType            *string
-	VerificationStatus     string
-	TrustStatus            string
-	ClerkCreatedByUserID   *string
-	OwnerBootstrapped      bool
-	OwnerBootstrapEligible bool
+	ID                            uuid.UUID
+	ClerkOrganizationID           string
+	Name                          *string
+	Slug                          *string
+	Status                        string
+	CreatedAt                     pgtype.Timestamptz
+	UpdatedAt                     pgtype.Timestamptz
+	LegalName                     *string
+	Website                       *string
+	Country                       *string
+	CompanyType                   *string
+	VerificationStatus            string
+	TrustStatus                   string
+	ClerkCreatedByUserID          *string
+	OwnerBootstrapped             bool
+	OwnerBootstrapEligible        bool
+	BusinessEmailDomain           *string
+	BusinessEmailVerifiedAt       pgtype.Timestamptz
+	BusinessEmailVerifiedByUserID *uuid.UUID
 }
