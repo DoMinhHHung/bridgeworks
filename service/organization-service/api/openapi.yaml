@@ -1,12 +1,16 @@
 openapi: 3.1.0
 info:
   title: BridgeWorks Organization Service API
-  version: 0.3.0
-  description: Organization synchronization, Clerk-owned creation projection, BridgeWorks onboarding product profile, local membership authorization, and current-organization commands exposed through APISIX.
+  version: 0.4.0
+  description: |
+    Organization projection, BridgeWorks product profile, business-email point-in-time
+    proof, and local membership administration exposed through APISIX. Clerk remains
+    authoritative for provider organization/invitation/membership lifecycle. Local
+    application_role and permissions remain BridgeWorks authorization authority.
 paths:
   /api/v1/organizations/health/live:
     get:
-      summary: Check Organization Service process liveness
+      summary: Check process liveness
       operationId: getOrganizationLiveness
       responses:
         "200":
@@ -16,11 +20,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
+
   /api/v1/organizations/health/ready:
     get:
-      summary: Check Organization PostgreSQL readiness
+      summary: Check PostgreSQL readiness
       operationId: getOrganizationReadiness
-      description: Identity Service is intentionally excluded because it is a request-time dependency only.
+      description: Identity and Clerk Backend API are request-time dependencies and are intentionally excluded from readiness.
       responses:
         "200":
           description: Organization PostgreSQL is reachable
@@ -29,33 +34,36 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "503": { $ref: "#/components/responses/PublicServiceUnavailable" }
+
   /api/v1/organizations/webhooks/clerk:
     post:
-      summary: Synchronize verified Clerk organization events
-      operationId: synchronizeClerkOrganizationWebhook
-      description: Public Svix-signed endpoint. Signature verification occurs on the raw body before narrow decoding. Clerk remains authoritative for provider organization identity, name/slug, creator identity, and memberships. BridgeWorks product profile, verification, trust, application roles, and permissions remain locally authoritative.
+      summary: Reconcile signed Clerk organization and membership events
+      operationId: reconcileClerkOrganizationWebhook
+      description: |
+        Public Svix-signed endpoint. Signature verification occurs against the raw
+        body before decoding. Provider organization/membership identity and lifecycle
+        remain Clerk-owned. Local application roles remain BridgeWorks-owned except
+        for safe compatibility initialization, one-time initial-owner bootstrap, and
+        locally correlated invitation intent reconciliation.
       responses:
         "204":
-          description: Supported event processed, duplicate or stale event retained, or verified unsupported event ignored
+          description: Supported event processed, duplicate/stale event retained safely, or verified unsupported event ignored
           headers:
             X-Request-Id: { $ref: "#/components/headers/RequestID" }
         "400": { $ref: "#/components/responses/InvalidWebhook" }
-        "413": { $ref: "#/components/responses/RequestTooLarge" }
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "413": { $ref: "#/components/responses/PublicRequestTooLarge" }
+        "503": { $ref: "#/components/responses/PublicServiceUnavailable" }
+
   /api/v1/organizations/current:
-    options:
-      summary: Browser CORS preflight
-      responses:
-        "204": { description: Preflight accepted for a configured origin }
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
     get:
-      summary: Return the active local organization projection
+      summary: Return the current active local organization projection
       operationId: getCurrentOrganization
-      description: If Clerk has created the active organization but its verified webhook projection has not arrived yet, the API returns organization_not_ready with Retry-After rather than creating a local row from client input.
       security: [{ ClerkSessionToken: [] }]
       responses:
         "200":
-          description: Current active organization including BridgeWorks-owned product profile and lifecycle projections
+          description: Current organization product and lifecycle projection
           headers:
             X-Request-Id: { $ref: "#/components/headers/RequestID" }
             Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -65,12 +73,12 @@ paths:
               schema: { $ref: "#/components/schemas/CurrentOrganization" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+        "409": { $ref: "#/components/responses/ActorConflict" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
     patch:
-      summary: Update BridgeWorks-owned onboarding product profile
+      summary: Update BridgeWorks-owned organization product profile
       operationId: patchCurrentOrganization
-      description: Mutates only legal_name, website, country, and company_type for the verified active organization. Tenant identity comes only from the verified Clerk session plus local membership resolution. Provider fields, verification/trust states, application roles, and permissions cannot be supplied here. Requires local organization.manage.
+      description: Requires local organization.manage. Tenant identity is never accepted from the request body.
       security: [{ ClerkSessionToken: [] }]
       requestBody:
         required: true
@@ -79,7 +87,7 @@ paths:
             schema: { $ref: "#/components/schemas/OrganizationProfilePatch" }
       responses:
         "200":
-          description: Updated normalized organization projection. Repeating an equivalent normalized patch is idempotent.
+          description: Updated normalized organization projection
           headers:
             X-Request-Id: { $ref: "#/components/headers/RequestID" }
             Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -87,29 +95,28 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CurrentOrganization" }
-        "400": { $ref: "#/components/responses/InvalidRequestAuthenticated" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "413": { $ref: "#/components/responses/RequestTooLargeAuthenticated" }
-        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+        "409": { $ref: "#/components/responses/ActorConflict" }
+        "413": { $ref: "#/components/responses/AuthenticatedRequestTooLarge" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
+
   /api/v1/organizations/current/verification:
-    options:
-      summary: Browser CORS preflight
-      responses:
-        "204": { description: Preflight accepted for a configured origin }
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
     post:
       summary: Request BridgeWorks company verification
       operationId: requestCurrentOrganizationVerification
-      description: Customer-side request only. Atomically transitions unverified or rejected to pending; pending is an idempotent success. It never approves or rejects a company. Requires local organization.verify.request.
+      description: |
+        Customer-side request only. Requires local organization.verify.request.
+        unverified or rejected transition to pending; pending is idempotent. This
+        endpoint never performs manual pending -> verified or pending -> rejected.
       security: [{ ClerkSessionToken: [] }]
       requestBody:
         required: false
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
+            schema: { $ref: "#/components/schemas/EmptyCommand" }
       responses:
         "200":
           description: Current organization with verification_status pending
@@ -120,19 +127,82 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CurrentOrganization" }
-        "400": { $ref: "#/components/responses/InvalidRequestAuthenticated" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { $ref: "#/components/responses/VerificationConflict" }
-        "413": { $ref: "#/components/responses/RequestTooLargeAuthenticated" }
-        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
-  /api/v1/organizations/current/membership:
-    options:
-      summary: Browser CORS preflight
+        "409":
+          description: organization_not_ready or verification_transition_not_allowed
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+            Retry-After:
+              description: Present with value 2 only for organization_not_ready.
+              schema: { type: integer, const: 2 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "413": { $ref: "#/components/responses/AuthenticatedRequestTooLarge" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
+
+  /api/v1/organizations/current/business-email-verification:
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    post:
+      summary: Record a point-in-time verified business-email domain proof
+      operationId: verifyCurrentOrganizationBusinessEmail
+      description: |
+        Requires local organization.verify.request and current active owner/admin
+        policy. Identity /api/v1/me is the authority for active-account state and
+        verified primary-email projection. This records the normalized non-personal
+        email domain at command time; it does not prove legal domain ownership and
+        does not set verification_status=verified.
+      security: [{ ClerkSessionToken: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmptyCommand" }
       responses:
-        "204": { description: Preflight accepted for a configured origin }
+        "200":
+          description: Point-in-time business-email proof updated
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BusinessEmailVerificationResult" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: Identity/organization projection lag, verified primary email missing, or local membership no longer active
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+            Retry-After:
+              description: Present with value 2 only for identity_not_ready or organization_not_ready.
+              schema: { type: integer, const: 2 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "413": { $ref: "#/components/responses/AuthenticatedRequestTooLarge" }
+        "422":
+          description: Current verified email/domain is malformed, non-ASCII, personal/free-email policy, or otherwise ineligible
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
+
+  /api/v1/organizations/current/membership:
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
     get:
-      summary: Return the actor's local membership authorization projection
+      summary: Return the actor's local effective membership authorization
       operationId: getCurrentOrganizationMembership
       security: [{ ClerkSessionToken: [] }]
       responses:
@@ -147,32 +217,231 @@ paths:
               schema: { $ref: "#/components/schemas/CurrentMembership" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+        "409": { $ref: "#/components/responses/ActorConflict" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
+    delete:
+      summary: Leave the current organization through the Clerk membership provider
+      operationId: leaveCurrentOrganization
+      description: |
+        Reserves local removal first, immediately excluding the membership from
+        authorization/effective-owner counting, then calls Clerk outside the
+        PostgreSQL transaction. The signed membership webhook finalizes deletion.
+      security: [{ ClerkSessionToken: [] }]
+      responses:
+        "202":
+          description: Provider-backed leave accepted; local deletion awaits reconciliation
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/MembershipAdministrationConflict" }
+        "503": { $ref: "#/components/responses/MembershipProviderUnavailable" }
+
+  /api/v1/organizations/current/invitations:
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    post:
+      summary: Create a Clerk organization invitation with local role intent
+      operationId: createCurrentOrganizationInvitation
+      description: |
+        Requires local membership.invite. The organization comes only from ActorContext.
+        BridgeWorks persists a UUIDv7 local invitation intent, then calls Clerk outside
+        the transaction. Only the opaque bridgeworks_invitation_id is placed in Clerk
+        publicMetadata; application_role remains local and is applied only by verified
+        signed membership webhook reconciliation.
+      security: [{ ClerkSessionToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvitationRequest" }
+      responses:
+        "202":
+          description: Provider invitation accepted; no local active membership exists until webhook reconciliation
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationResponse" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: invitation_conflict or actor/local lifecycle conflict
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "413": { $ref: "#/components/responses/AuthenticatedRequestTooLarge" }
+        "422":
+          description: Provider definitely rejected the invitation
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "503": { $ref: "#/components/responses/MembershipProviderUnavailable" }
+
+  /api/v1/organizations/current/members/{membershipID}/role:
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    parameters:
+      - $ref: "#/components/parameters/MembershipID"
+    patch:
+      summary: Mutate a local BridgeWorks application role
+      operationId: patchCurrentOrganizationMemberRole
+      description: |
+        Requires membership.role.manage plus explicit owner-sensitive domain policy.
+        The target is a local membership UUID and is queried inside the actor organization.
+        Clerk role claims do not determine the resulting BridgeWorks role.
+      security: [{ ClerkSessionToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleMutationRequest" }
+      responses:
+        "204":
+          description: Local application role updated
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/MembershipNotFound" }
+        "409": { $ref: "#/components/responses/MembershipAdministrationConflict" }
+        "413": { $ref: "#/components/responses/AuthenticatedRequestTooLarge" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
+
+  /api/v1/organizations/current/members/{membershipID}:
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    parameters:
+      - $ref: "#/components/parameters/MembershipID"
+    delete:
+      summary: Remove another membership through the Clerk membership provider
+      operationId: removeCurrentOrganizationMember
+      description: |
+        Requires membership.manage plus owner-sensitive policy. A local removal
+        reservation is committed before the Clerk delete call. Foreign and missing
+        membership IDs share the same not-found response.
+      security: [{ ClerkSessionToken: [] }]
+      responses:
+        "202":
+          description: Provider-backed removal accepted; signed webhook will finalize local deletion
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/MembershipNotFound" }
+        "409": { $ref: "#/components/responses/MembershipAdministrationConflict" }
+        "503": { $ref: "#/components/responses/MembershipProviderUnavailable" }
+
+  /api/v1/organizations/current/ownership-transfer:
+    options: { $ref: "#/components/pathItems/CorsPreflight" }
+    post:
+      summary: Atomically transfer ownership to an active same-organization membership
+      operationId: transferCurrentOrganizationOwnership
+      description: |
+        Only a current local owner may transfer. Under the organization advisory
+        lock, the target becomes owner and the transferring owner becomes admin in
+        one PostgreSQL transaction. Multiple owners are otherwise allowed.
+      security: [{ ClerkSessionToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OwnershipTransferRequest" }
+      responses:
+        "204":
+          description: Ownership transfer committed atomically
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/MembershipNotFound" }
+        "409": { $ref: "#/components/responses/MembershipAdministrationConflict" }
+        "413": { $ref: "#/components/responses/AuthenticatedRequestTooLarge" }
+        "503": { $ref: "#/components/responses/AuthenticatedServiceUnavailable" }
+
 components:
+  pathItems:
+    CorsPreflight:
+      summary: Browser CORS preflight handled at the APISIX edge
+      responses:
+        "204":
+          description: Preflight accepted for a configured origin
+
   securitySchemes:
     ClerkSessionToken:
       type: http
       scheme: bearer
       bearerFormat: Clerk session token
-      description: Verified Clerk session JWT with an active organization context. JWT organization role and permissions are not authorization authority.
+      description: Verified Clerk session JWT with active organization context. JWT organization role/permissions are not BridgeWorks authorization authority.
+
+  parameters:
+    MembershipID:
+      name: membershipID
+      in: path
+      required: true
+      description: BridgeWorks local membership UUID. Clerk membership IDs are provider-private and are not accepted.
+      schema:
+        type: string
+        format: uuid
+
   headers:
     RequestID:
-      description: Request correlation identifier generated or forwarded by APISIX.
+      description: Request correlation identifier generated or forwarded through APISIX.
       schema: { type: string }
     NoStore:
-      description: Authenticated projections must not be cached.
+      description: Authenticated responses must not be cached.
       schema: { type: string, const: no-store }
     VaryAuthorization:
-      description: Contains Authorization and may also contain Origin.
+      description: Contains Authorization and may also contain Origin after APISIX CORS processing.
       schema: { type: string }
     BearerChallenge:
-      description: Stable Bearer authentication challenge without token-validation details.
+      description: Stable Bearer authentication challenge.
       schema: { type: string, const: 'Bearer realm="bridgeworks"' }
-    RetryAfter:
-      description: Suggested retry delay in seconds. Present for organization_not_ready eventual-consistency conflicts; lifecycle conflicts do not emit it.
-      schema: { type: integer, const: 2 }
+
   responses:
+    PublicServiceUnavailable:
+      description: Organization PostgreSQL or webhook processing is temporarily unavailable
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+    PublicRequestTooLarge:
+      description: Public webhook body exceeded its configured bound
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+    InvalidWebhook:
+      description: Signature, Svix headers, or verified webhook payload is invalid
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
     Unauthorized:
       description: Clerk session token is missing or invalid
       headers:
@@ -183,8 +452,9 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
     Forbidden:
-      description: Account, organization, membership, or local permission denies access
+      description: Account, organization, membership, local permission, or owner-sensitive policy denies access
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
         Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -192,30 +462,22 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    Conflict:
-      description: Active organization context or an eventually consistent local projection is not ready
-      headers:
-        X-Request-Id: { $ref: "#/components/headers/RequestID" }
-        Cache-Control: { $ref: "#/components/headers/NoStore" }
-        Vary: { $ref: "#/components/headers/VaryAuthorization" }
-        Retry-After: { $ref: "#/components/headers/RetryAfter" }
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    VerificationConflict:
-      description: Verification is already verified or otherwise cannot be requested from its current BridgeWorks lifecycle state. The same endpoint can also return organization_not_ready while the verified Clerk organization is waiting for local projection.
+
+    ActorConflict:
+      description: Identity/organization projection is not ready or active organization context is missing
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
         Cache-Control: { $ref: "#/components/headers/NoStore" }
         Vary: { $ref: "#/components/headers/VaryAuthorization" }
         Retry-After:
-          description: Present with value 2 only when the conflict code is organization_not_ready. It is omitted for verification_transition_not_allowed.
+          description: Present with value 2 only for identity_not_ready or organization_not_ready.
           schema: { type: integer, const: 2 }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    InvalidRequestAuthenticated:
-      description: Malformed, unknown, empty, or invalid onboarding input
+
+    InvalidRequest:
+      description: Malformed, unknown-field, empty, invalid-role, invalid-email, invalid-target, or otherwise invalid command input
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
         Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -223,22 +485,9 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    InvalidWebhook:
-      description: Signature, required Svix header, or verified payload is invalid
-      headers:
-        X-Request-Id: { $ref: "#/components/headers/RequestID" }
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    RequestTooLarge:
-      description: Webhook body exceeds the configured maximum
-      headers:
-        X-Request-Id: { $ref: "#/components/headers/RequestID" }
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    RequestTooLargeAuthenticated:
-      description: Onboarding request body exceeds the bounded command limit
+
+    AuthenticatedRequestTooLarge:
+      description: Authenticated command body exceeded the configured bound
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
         Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -246,15 +495,9 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    ServiceUnavailable:
-      description: Organization PostgreSQL or webhook processing is temporarily unavailable
-      headers:
-        X-Request-Id: { $ref: "#/components/headers/RequestID" }
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
-    ServiceUnavailableAuthenticated:
-      description: Organization PostgreSQL or Identity Service is temporarily unavailable
+
+    MembershipNotFound:
+      description: Local membership is missing or belongs to another organization
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
         Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -262,6 +505,40 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+    MembershipAdministrationConflict:
+      description: Last-owner, inactive-membership, removal-pending, or provider-state conflict
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+    MembershipProviderUnavailable:
+      description: |
+        Clerk membership/invitation provider is temporarily unavailable or returned
+        an ambiguous retryable result. Invitation creation is not blindly retried;
+        ambiguous local invitation intent is retained for reconciliation/operations.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+    AuthenticatedServiceUnavailable:
+      description: Organization PostgreSQL, Identity Service, or another request-time dependency is temporarily unavailable
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
   schemas:
     Health:
       type: object
@@ -270,6 +547,11 @@ components:
       properties:
         status: { type: string, const: ok }
         service: { type: string, const: organization-service }
+
+    EmptyCommand:
+      type: object
+      additionalProperties: false
+
     OrganizationProfilePatch:
       type: object
       additionalProperties: false
@@ -278,20 +560,20 @@ components:
         legal_name:
           type: [string, "null"]
           maxLength: 200
-          description: Trimmed legal company name. Null clears the field; a non-null blank value is invalid.
         website:
           type: [string, "null"]
           maxLength: 2048
-          description: Absolute HTTP or HTTPS URL. Credentials and fragments are rejected; scheme/host/default port are normalized. Null clears the field.
+          description: Absolute HTTP/HTTPS URL; credentials and fragments are rejected.
         country:
           type: [string, "null"]
           pattern: '^[A-Za-z]{2}$'
-          description: ISO 3166-1 alpha-2 code, normalized to uppercase. Null clears the field.
+          description: ISO 3166-1 alpha-2, normalized uppercase.
         company_type:
           type: [string, "null"]
           maxLength: 64
-          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*[A-Za-z0-9]$|^[A-Za-z0-9]$'
-          description: Taxonomy-neutral bounded identifier normalized to lowercase. The product taxonomy is intentionally not frozen in this PR. Null clears the field.
+          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?$'
+          description: Taxonomy-neutral bounded identifier normalized lowercase.
+
     CurrentOrganization:
       type: object
       additionalProperties: false
@@ -306,6 +588,8 @@ components:
         - company_type
         - verification_status
         - trust_status
+        - business_email_domain
+        - business_email_verified_at
       properties:
         id: { type: string, format: uuid }
         name: { type: [string, "null"] }
@@ -313,7 +597,6 @@ components:
         status:
           type: string
           const: active
-          description: Provider/application lifecycle. This is separate from verification_status and trust_status.
         legal_name: { type: [string, "null"] }
         website: { type: [string, "null"] }
         country: { type: [string, "null"] }
@@ -321,11 +604,18 @@ components:
         verification_status:
           type: string
           enum: [unverified, pending, verified, rejected]
-          description: BridgeWorks company-verification lifecycle. Client profile PATCH cannot set this field directly.
         trust_status:
           type: string
           const: unassessed
-          description: BridgeWorks trust lifecycle placeholder. Client onboarding commands cannot mutate it.
+        business_email_domain:
+          type: [string, "null"]
+          description: Historical normalized domain from the latest explicit point-in-time business-email verification.
+        business_email_verified_at:
+          type: [string, "null"]
+          format: date-time
+          description: Timestamp of the latest explicit point-in-time business-email verification.
+      description: business_email_verified_by_user_id is intentionally private and is not part of this response.
+
     CurrentMembership:
       type: object
       additionalProperties: false
@@ -333,14 +623,72 @@ components:
       properties:
         id: { type: string, format: uuid }
         organization_id: { type: string, format: uuid }
-        role:
-          type: string
-          enum: [owner, admin, recruiter, delivery_manager, viewer]
-          description: BridgeWorks local application role; Clerk role claims are not authorization authority.
+        role: { $ref: "#/components/schemas/ApplicationRole" }
         permissions:
           type: array
           items: { type: string }
-          description: Lexicographically sorted local effective permissions.
+          description: Sorted local BridgeWorks effective permissions.
+
+    ApplicationRole:
+      type: string
+      enum: [owner, admin, recruiter, delivery_manager, viewer]
+
+    InvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [email, application_role]
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 320
+          description: Provider invitation destination. Organization Service does not persist raw invitation email.
+        application_role: { $ref: "#/components/schemas/ApplicationRole" }
+
+    InvitationResponse:
+      type: object
+      additionalProperties: false
+      required: [id, application_role, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Local BridgeWorks invitation-intent UUIDv7, not a Clerk invitation ID.
+        application_role: { $ref: "#/components/schemas/ApplicationRole" }
+        status:
+          type: string
+          const: pending
+          description: Local intent/provider command accepted; this is not an active membership.
+
+    RoleMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [application_role]
+      properties:
+        application_role: { $ref: "#/components/schemas/ApplicationRole" }
+
+    OwnershipTransferRequest:
+      type: object
+      additionalProperties: false
+      required: [target_membership_id]
+      properties:
+        target_membership_id:
+          type: string
+          format: uuid
+          description: Local BridgeWorks membership UUID in the actor organization.
+
+    BusinessEmailVerificationResult:
+      type: object
+      additionalProperties: false
+      required: [domain, verified_at]
+      properties:
+        domain:
+          type: string
+          description: Normalized ASCII non-personal domain proven only as a verified-email domain at command time.
+        verified_at:
+          type: string
+          format: date-time
+
     ErrorEnvelope:
       type: object
       additionalProperties: false
