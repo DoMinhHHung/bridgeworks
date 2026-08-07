@@ -168,7 +168,18 @@ assert_header_token "${work}/current-headers" Vary Origin
 python3 - "${work}/current-body" "${pending_id}" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f: body=json.load(f)
-assert body == {'id':sys.argv[2], 'name':'BridgeWorks CI', 'slug':'bridgeworks-ci', 'status':'active'}
+assert body == {
+    'id': sys.argv[2],
+    'name': 'BridgeWorks CI',
+    'slug': 'bridgeworks-ci',
+    'status': 'active',
+    'legal_name': None,
+    'website': None,
+    'country': None,
+    'company_type': None,
+    'verification_status': 'unverified',
+    'trust_status': 'unassessed',
+}
 assert all('clerk' not in key for key in body)
 PY
 
@@ -178,7 +189,15 @@ python3 - "${work}/membership-body" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f: body=json.load(f)
 assert body['role']=='admin'
-assert body['permissions']==['membership.manage','membership.read','organization.manage','organization.read']
+assert body['permissions']==[
+    'membership.invite',
+    'membership.manage',
+    'membership.read',
+    'membership.role.manage',
+    'organization.manage',
+    'organization.read',
+    'organization.verify.request',
+]
 assert set(body)=={'id','organization_id','role','permissions'}
 PY
 

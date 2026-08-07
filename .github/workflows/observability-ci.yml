@@ -54,7 +54,7 @@ jobs:
           git diff --exit-code origin/main...HEAD -- \
             service/organization-service/migrations/000001_create_organization_foundation.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
-          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
+          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "2"
 
       - name: Verify private observability topology and bounded contracts
         shell: bash

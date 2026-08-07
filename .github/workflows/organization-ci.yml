@@ -73,6 +73,9 @@ jobs:
           grep --quiet "memberships_active_organization_user_uq" service/organization-service/internal/organizationsync/unit_of_work.go
           grep --quiet "validateMembershipOwnership" service/organization-service/internal/organizationsync/service.go
           grep --quiet "inconsistent Clerk membership projection" service/organization-service/internal/organizationsync/service.go
+          grep --quiet "SET name = \$2" service/organization-service/internal/store/queries/organizations.sql
+          ! grep -E "SET .*legal_name|SET .*website|SET .*country|SET .*company_type|SET .*verification_status|SET .*trust_status" \
+            service/organization-service/internal/store/queries/organizations.sql
 
       - name: Validate Organization Go module
         shell: bash
@@ -143,18 +146,23 @@ jobs:
         run: |
           set -euo pipefail
           docker compose up -d organization-postgres
-          first="$(docker compose run --rm organization-migrate up)"
+          docker compose build organization-migrate
+          if ! first="$(docker compose run --rm organization-migrate up)"; then
+            printf '%s\n' "${first}"
+            exit 1
+          fi
           printf '%s\n' "${first}"
-          grep --quiet '"count":1' <<< "${first}"
+          grep --quiet '"count":2' <<< "${first}"
           second="$(docker compose run --rm organization-migrate up)"
           printf '%s\n' "${second}"
           grep --quiet '"count":0' <<< "${second}"
           version="$(docker compose run --rm organization-migrate version)"
           printf '%s\n' "${version}"
-          grep --quiet '"version":1' <<< "${version}"
+          grep --quiet '"version":2' <<< "${version}"
           status="$(docker compose run --rm organization-migrate status)"
           printf '%s\n' "${status}"
           grep --quiet '000001_create_organization_foundation.sql' <<< "${status}"
+          grep --quiet '000002_complete_organization_domain.sql' <<< "${status}"
           grep --quiet '"state":"applied"' <<< "${status}"
           postgres_id="$(docker compose ps -q organization-postgres)"
           postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
@@ -169,10 +177,48 @@ jobs:
               select to_regclass('organization.organizations') is not null;
               select to_regclass('organization.memberships') is not null;
               select to_regclass('organization.clerk_webhook_events') is not null;
-              select count(*) = 2 from organization.roles;
-              select count(*) = 4 from organization.permissions;
-              select count(*) = 5 from organization.role_permissions;
+              select count(*) = 5 from organization.roles;
+              select count(*) = 7 from organization.permissions;
+              select count(*) = 17 from organization.role_permissions;
             " | grep --count ' t' | grep --quiet '^7$'
+
+      - name: Verify v1 to v2 Organization domain migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          postgres_id="$(docker compose ps -q organization-postgres)"
+          postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
+          network="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${postgres_id}" | head -n 1)"
+          test -n "${postgres_user}"
+          test -n "${network}"
+          test_database='bridgeworks_organization_migration_test'
+          docker compose exec -T organization-postgres psql \
+            --username "${postgres_user}" \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command "drop database if exists ${test_database} with (force)"
+          docker compose exec -T organization-postgres psql \
+            --username "${postgres_user}" \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command "create database ${test_database}"
+          migration_test_url="postgres://${ORGANIZATION_POSTGRES_USER}:${ORGANIZATION_POSTGRES_PASSWORD}@organization-postgres:5432/${test_database}?sslmode=disable"
+          docker run --rm \
+            --network "${network}" \
+            --volume "${PWD}:/src" \
+            --workdir /src/service/organization-service \
+            --env "ORGANIZATION_MIGRATION_TEST_DATABASE_URL=${migration_test_url}" \
+            golang:1.26.5-bookworm \
+            go test -race -run '^TestDomainMigrationUpgradesExistingRowsSafely$' ./migrations
+          unset migration_test_url
+          docker compose exec -T organization-postgres psql \
+            --username "${postgres_user}" \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command "drop database if exists ${test_database} with (force)"
 
       - name: Start complete private stack
         run: make stack-up

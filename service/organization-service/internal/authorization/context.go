@@ -7,10 +7,13 @@ import (
 )
 
 const (
-	PermissionOrganizationRead   = "organization.read"
-	PermissionOrganizationManage = "organization.manage"
-	PermissionMembershipRead     = "membership.read"
-	PermissionMembershipManage   = "membership.manage"
+	PermissionOrganizationRead          = "organization.read"
+	PermissionOrganizationManage        = "organization.manage"
+	PermissionOrganizationVerifyRequest = "organization.verify.request"
+	PermissionMembershipRead            = "membership.read"
+	PermissionMembershipInvite          = "membership.invite"
+	PermissionMembershipManage          = "membership.manage"
+	PermissionMembershipRoleManage      = "membership.role.manage"
 )
 
 type Principal struct {
