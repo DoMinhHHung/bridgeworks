@@ -25,6 +25,7 @@ type Membership struct {
 	OrganizationID  uuid.UUID
 	ApplicationRole string
 	Status          string
+	RemovalPending  bool
 }
 
 type UnitOfWork interface {
@@ -99,7 +100,7 @@ func (s *Service) Verify(
 	if err != nil {
 		return Result{}, safeerr.Wrap("lock actor membership for business email verification", err)
 	}
-	if !found || membership.Status != "active" {
+	if !found || membership.Status != "active" || membership.RemovalPending {
 		return Result{}, ErrMembershipNotActive
 	}
 	if membership.ApplicationRole != "owner" && membership.ApplicationRole != "admin" {
