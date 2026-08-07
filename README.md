@@ -1288,3 +1288,68 @@ PostgreSQL pool collection remains scrape-time and nil-safe, but programming pan
 Identity authenticated `/me` reads use a resilient Upstash-compatible Redis cache-aside layer. PostgreSQL remains authoritative, Redis is excluded from readiness, and cache failures fall back to PostgreSQL. Clerk user synchronization invalidates the shared cache only after a successful transaction commit. The public API, Clerk authentication contract, APISIX routes, PostgreSQL schema, and pool defaults are unchanged.
 
 Local Compose includes a private, memory-bounded Redis service for development and CI. Production provisions Upstash externally with TLS and secret-managed credentials. Operational details and rollback are documented in [`docs/runbooks/identity-current-user-cache.md`](docs/runbooks/identity-current-user-cache.md).
+
+---
+
+## Current deployed foundation — 2026-08-07
+
+The repository currently implements a microservice runtime even though the earlier product-planning section above describes a modular-monolith recommendation. The deployed implementation is authoritative for current operations:
+
+```text
+Vercel BridgeWorks Apps
+        |
+        v
+public APISIX on Cloud Run
+        |
+        | Google ID token in X-Serverless-Authorization
+        v
+private Identity / Organization Cloud Run services
+        |
+        v
+Supabase PostgreSQL
+```
+
+Current deployed endpoints and boundaries:
+
+- Frontend: `https://bridge-works-apps.vercel.app`.
+- APISIX public edge: `https://apisix-gateway-fi2xhi6azq-as.a.run.app`.
+- Identity and Organization remain private Cloud Run services; unauthenticated direct requests are rejected by the platform.
+- APISIX obtains Google ID tokens for private upstream authentication while preserving Clerk Bearer tokens for application authentication.
+- Clerk user, organization, and organization-membership webhooks enter through APISIX and are verified by the receiving service with Svix signing secrets stored in Secret Manager.
+- Bootstrap webhook secret version 1 is disabled; the deployed services are pinned to the active version 2 secrets.
+- Real Clerk webhook delivery, PostgreSQL projection, duplicate replay/idempotency, and credential-shaped log scans have been exercised successfully in the deployed environment.
+- The Vercel frontend has completed a real authenticated Identity happy-path smoke: Clerk sign-in -> `/app` -> APISIX -> private Identity -> PostgreSQL projection.
+
+### Organization implementation status versus MVP onboarding
+
+The Organization Service is a strong synchronization/authorization foundation, but it does **not** yet complete the product-level Organization onboarding scope in section 6.1.
+
+Current implemented foundation:
+
+- production Go service, migrations, `sqlc`, PostgreSQL ownership boundary, health/readiness, structured errors, request IDs, graceful shutdown, private metrics, and CI;
+- Clerk organization and membership projection for exact organization/member lifecycle webhook events;
+- transactional inbox, duplicate/stale ordering, UUIDv7 projections, concurrency/conflict handling, and production replay idempotency;
+- authenticated current-organization and current-membership reads;
+- local role/permission authorization with the initial `admin` and `viewer` roles;
+- private Organization -> Identity dependency with Google Cloud Run service-to-service authentication;
+- production deployment behind APISIX with private backends.
+
+Still missing from the root README Organization onboarding contract:
+
+- BridgeWorks/API-driven organization creation workflow;
+- business-email verification;
+- manual company-verification state and admin approval workflow;
+- member invitation lifecycle owned by the product rather than only post-acceptance Clerk membership projection;
+- complete product role model: `owner`, `admin`, `recruiter`, `delivery_manager`, `viewer`;
+- role mutation/assignment APIs and authorization policies for those roles;
+- product Organization fields such as `legal_name`, `website`, `country`, `company_type`, `verification_status`, and `trust_status`;
+- immutable/auditable organization administration events required by the product principles.
+
+Two different completion measures should be used:
+
+```text
+Organization infrastructure / sync / authorization foundation: approximately 80–85%
+Organization product onboarding scope from section 6.1: approximately 25–30%
+```
+
+The lower product percentage is intentional: production hardening is well advanced, but most self-service onboarding and organization-administration behavior described by the product README has not been implemented yet. The next Organization work should focus on the missing product slice without weakening the existing webhook, tenancy, authorization, privacy, idempotency, APISIX, or Cloud Run boundaries.
