@@ -146,11 +146,11 @@ func (q *Queries) ListPermissionsForRole(ctx context.Context, roleKey string) ([
 	defer rows.Close()
 	var items []string
 	for rows.Next() {
-		var permissionKey string
-		if err := rows.Scan(&permissionKey); err != nil {
+		var permission_key string
+		if err := rows.Scan(&permission_key); err != nil {
 			return nil, err
 		}
-		items = append(items, permissionKey)
+		items = append(items, permission_key)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
