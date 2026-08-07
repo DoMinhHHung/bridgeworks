@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationaudit"
 	"github.com/google/uuid"
 )
 
@@ -74,7 +75,8 @@ type UnitOfWork interface {
 	MarkMembershipDeleted(context.Context, string) error
 	GetPendingInvitationIntent(context.Context, uuid.UUID, uuid.UUID) (InvitationIntent, bool, error)
 	ConsumeInvitationIntent(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
-	DeleteMembershipRemovalIntent(context.Context, uuid.UUID, uuid.UUID) error
+	DeleteMembershipRemovalIntent(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+	InsertAuditEvent(context.Context, organizationaudit.Event) error
 
 	Commit(context.Context) error
 	Rollback(context.Context) error
