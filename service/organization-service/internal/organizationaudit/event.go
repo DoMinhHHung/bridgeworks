@@ -12,17 +12,17 @@ const (
 	ActorPlatformAdmin = "platform_admin"
 	ActorSystem        = "system"
 
-	EventOrganizationProfileUpdated           = "organization.profile.updated"
-	EventOrganizationVerificationRequested    = "organization.verification.requested"
-	EventOrganizationBusinessEmailVerified    = "organization.business_email.verified"
-	EventMembershipInvitationRequested        = "membership.invitation.requested"
-	EventMembershipRoleChanged                = "membership.role.changed"
-	EventMembershipRemovalRequested           = "membership.removal.requested"
-	EventMembershipLeaveRequested             = "membership.leave.requested"
-	EventOrganizationOwnershipTransferred     = "organization.ownership.transferred"
-	EventOrganizationVerificationReviewed     = "organization.verification.reviewed"
-	EventMembershipActivated                  = "membership.activated"
-	EventMembershipRemovalCompleted           = "membership.removal.completed"
+	EventOrganizationProfileUpdated        = "organization.profile.updated"
+	EventOrganizationVerificationRequested = "organization.verification.requested"
+	EventOrganizationBusinessEmailVerified = "organization.business_email.verified"
+	EventMembershipInvitationRequested     = "membership.invitation.requested"
+	EventMembershipRoleChanged             = "membership.role.changed"
+	EventMembershipRemovalRequested        = "membership.removal.requested"
+	EventMembershipLeaveRequested          = "membership.leave.requested"
+	EventOrganizationOwnershipTransferred  = "organization.ownership.transferred"
+	EventOrganizationVerificationReviewed  = "organization.verification.reviewed"
+	EventMembershipActivated               = "membership.activated"
+	EventMembershipRemovalCompleted        = "membership.removal.completed"
 )
 
 type Event struct {
