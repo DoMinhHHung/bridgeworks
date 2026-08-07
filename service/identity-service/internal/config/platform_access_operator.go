@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -45,7 +46,10 @@ func loadPlatformAccessOperator(lookup lookupEnvFunc) (PlatformAccessOperatorCon
 		return PlatformAccessOperatorConfig{}, err
 	}
 	if commandTimeout > maximumPlatformAccessCommandTimeout {
-		return PlatformAccessOperatorConfig{}, errPlatformAccessCommandTimeoutTooLarge
+		return PlatformAccessOperatorConfig{}, fmt.Errorf(
+			"PLATFORM_ACCESS_COMMAND_TIMEOUT must be less than or equal to %s",
+			maximumPlatformAccessCommandTimeout,
+		)
 	}
 	logLevel, err := logLevelValue(lookup, "LOG_LEVEL", defaultLogLevel)
 	if err != nil {
