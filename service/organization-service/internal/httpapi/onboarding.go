@@ -62,9 +62,15 @@ func PatchCurrentOrganization(resolver CurrentOrganizationResolver, onboarding O
 			return
 		}
 		patch := organizationonboarding.ProfilePatch{
-			LegalName: organizationonboarding.StringPatch{Set: request.LegalName.Set, Value: request.LegalName.Value},
-			Website: organizationonboarding.StringPatch{Set: request.Website.Set, Value: request.Website.Value},
-			Country: organizationonboarding.StringPatch{Set: request.Country.Set, Value: request.Country.Value},
+			LegalName: organizationonboarding.StringPatch{
+				Set: request.LegalName.Set, Value: request.LegalName.Value,
+			},
+			Website: organizationonboarding.StringPatch{
+				Set: request.Website.Set, Value: request.Website.Value,
+			},
+			Country: organizationonboarding.StringPatch{
+				Set: request.Country.Set, Value: request.Country.Value,
+			},
 			CompanyType: organizationonboarding.StringPatch{
 				Set: request.CompanyType.Set, Value: request.CompanyType.Value,
 			},
