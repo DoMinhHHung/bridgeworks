@@ -21,15 +21,12 @@ RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
           clerk_created_by_user_id, owner_bootstrapped;
 
--- name: UpdateOrganizationProjection :one
+-- name: UpdateOrganizationProjection :exec
 UPDATE organization.organizations
 SET name = $2,
     slug = $3,
     status = $4
-WHERE clerk_organization_id = $1
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
-          legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped;
+WHERE clerk_organization_id = $1;
 
 -- name: SetOrganizationCreator :one
 UPDATE organization.organizations
