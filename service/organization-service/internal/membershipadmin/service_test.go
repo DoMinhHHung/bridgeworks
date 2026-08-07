@@ -359,7 +359,7 @@ func TestCrossTenantMembershipTargetIsNotFound(t *testing.T) {
 func TestPendingRemovalRetriesProviderAndTimeoutKeepsAuthorizationFence(t *testing.T) {
 	uow := newFakeAdminUOW(RoleOwner, RoleViewer)
 	uow.removalPending[adminTestTargetID] = true
-	provider := &fakeAdminProvider{deleteErr: ProviderErrUnavailable}
+	provider := &fakeAdminProvider{deleteErr: ErrUpstreamUnavailable}
 	service := New(fakeAdminFactory{uow: uow}, provider, fakeAdminGenerator{})
 	if err := service.Remove(context.Background(), adminActor(), adminTestTargetID); !errors.Is(err, ErrProviderUnavailable) {
 		t.Fatalf("Remove() error = %v", err)
@@ -383,9 +383,9 @@ func TestInvitationProviderFailureSemantics(t *testing.T) {
 		wantErr     error
 		wantIntent  bool
 	}{
-		{name: "timeout preserves intent", providerErr: ProviderErrUnavailable, wantErr: ErrProviderUnavailable, wantIntent: true},
-		{name: "duplicate cleans intent", providerErr: ProviderErrConflict, wantErr: ErrInvitationConflict},
-		{name: "rejected cleans intent", providerErr: ProviderErrRejected, wantErr: ErrInvitationRejected},
+		{name: "timeout preserves intent", providerErr: ErrUpstreamUnavailable, wantErr: ErrProviderUnavailable, wantIntent: true},
+		{name: "duplicate cleans intent", providerErr: ErrUpstreamConflict, wantErr: ErrInvitationConflict},
+		{name: "rejected cleans intent", providerErr: ErrUpstreamRejected, wantErr: ErrInvitationRejected},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			uow := newFakeAdminUOW(RoleOwner, RoleViewer)
