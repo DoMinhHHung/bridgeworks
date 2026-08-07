@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	identitymigrations "github.com/DoMinhHHung/bridgeworks/service/identity-service/migrations"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platformaccess"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platformaccessoperator"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/store"
+	identitymigrations "github.com/DoMinhHHung/bridgeworks/service/identity-service/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 
