@@ -39,6 +39,9 @@ func TestOwnerBootstrapOrganizationBeforeMembership(t *testing.T) {
 	if len(uow.insertedOrganizations) != 1 || uow.insertedOrganizations[0].ClerkCreatedByUserID == nil {
 		t.Fatalf("creator projection was not persisted: %#v", uow.insertedOrganizations)
 	}
+	if !uow.insertedOrganizations[0].OwnerBootstrapEligible {
+		t.Fatal("new organization was not owner-bootstrap eligible")
+	}
 
 	uow.organizationFound = true
 	uow.organization = uow.insertedOrganizations[0]
@@ -71,7 +74,9 @@ func TestOwnerBootstrapMembershipBeforeOrganization(t *testing.T) {
 	creator := "user-1"
 	uow := newFakeUnitOfWork()
 	uow.organizationFound = true
-	uow.organization = Organization{ID: testOrganizationID, Status: "pending"}
+	uow.organization = Organization{
+		ID: testOrganizationID, Status: "pending", OwnerBootstrapEligible: true,
+	}
 	uow.activeFound = true
 	uow.activeMembership = Membership{
 		ID: testMembershipID, OrganizationID: testOrganizationID,
@@ -93,10 +98,128 @@ func TestOwnerBootstrapMembershipBeforeOrganization(t *testing.T) {
 	}
 }
 
+func TestOwnerBootstrapLegacyOrganizationNeverElevatesHistoricalCreator(t *testing.T) {
+	creator := "user-legacy-creator"
+	uow := newFakeUnitOfWork()
+	uow.organizationFound = true
+	uow.organization = Organization{
+		ID: testOrganizationID, Status: "active", OwnerBootstrapEligible: false,
+	}
+	uow.activeFound = true
+	uow.activeMembership = Membership{
+		ID: testMembershipID, OrganizationID: testOrganizationID,
+		ClerkMembershipID: "mem-legacy", ClerkUserID: creator,
+		ApplicationRole: RoleViewer, Status: "active",
+	}
+	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+	event := organizationEvent(EventOrganizationUpdated)
+	event.Organization.CreatedBy = &creator
+
+	if err := service.Process(context.Background(), event); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if uow.organization.ClerkCreatedByUserID == nil || *uow.organization.ClerkCreatedByUserID != creator {
+		t.Fatalf("legacy creator projection = %#v", uow.organization.ClerkCreatedByUserID)
+	}
+	if uow.activeMembership.ApplicationRole != RoleViewer {
+		t.Fatalf("legacy viewer was elevated: %q", uow.activeMembership.ApplicationRole)
+	}
+	if uow.organization.OwnerBootstrapped {
+		t.Fatal("legacy organization completed owner bootstrap")
+	}
+}
+
+func TestOwnerBootstrapRequiresActiveOrganization(t *testing.T) {
+	creator := "user-creator"
+	for _, status := range []string{"disabled", "deleted"} {
+		t.Run(status, func(t *testing.T) {
+			uow := newFakeUnitOfWork()
+			uow.organizationFound = true
+			uow.organization = Organization{
+				ID: testOrganizationID,
+				Status: status,
+				ClerkCreatedByUserID: &creator,
+				OwnerBootstrapEligible: true,
+			}
+			uow.activeFound = true
+			uow.activeMembership = Membership{
+				ID: testMembershipID, OrganizationID: testOrganizationID,
+				ClerkMembershipID: "mem-creator", ClerkUserID: creator,
+				ApplicationRole: RoleAdmin, Status: "active",
+			}
+			service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+			if err := service.Process(context.Background(), organizationEvent(EventOrganizationUpdated)); err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if uow.activeMembership.ApplicationRole != RoleAdmin {
+				t.Fatalf("%s organization elevated creator: %q", status, uow.activeMembership.ApplicationRole)
+			}
+			if uow.organization.OwnerBootstrapped {
+				t.Fatalf("%s organization completed owner bootstrap", status)
+			}
+		})
+	}
+}
+
+func TestOwnerBootstrapRequiresActiveCreatorMembership(t *testing.T) {
+	creator := "user-inactive-creator"
+	uow := newFakeUnitOfWork()
+	uow.organizationFound = true
+	uow.organization = Organization{
+		ID: testOrganizationID,
+		Status: "active",
+		ClerkCreatedByUserID: &creator,
+		OwnerBootstrapEligible: true,
+	}
+	uow.membershipFound = true
+	uow.membership = Membership{
+		ID: testMembershipID, OrganizationID: testOrganizationID,
+		ClerkMembershipID: "mem-inactive", ClerkUserID: creator,
+		ApplicationRole: RoleViewer, Status: "deleted",
+	}
+	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+
+	if err := service.Process(context.Background(), organizationEvent(EventOrganizationUpdated)); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if uow.organization.OwnerBootstrapped {
+		t.Fatal("inactive creator membership consumed or completed owner bootstrap")
+	}
+}
+
+func TestOwnerBootstrapOneTimeFenceDoesNotRegrantRole(t *testing.T) {
+	creator := "user-creator"
+	uow := newFakeUnitOfWork()
+	uow.organizationFound = true
+	uow.organization = Organization{
+		ID: testOrganizationID,
+		Status: "active",
+		ClerkCreatedByUserID: &creator,
+		OwnerBootstrapped: true,
+		OwnerBootstrapEligible: true,
+	}
+	uow.activeFound = true
+	uow.activeMembership = Membership{
+		ID: testMembershipID, OrganizationID: testOrganizationID,
+		ClerkMembershipID: "mem-creator", ClerkUserID: creator,
+		ApplicationRole: RoleViewer, Status: "active",
+	}
+	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+
+	if err := service.Process(context.Background(), organizationEvent(EventOrganizationUpdated)); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if uow.activeMembership.ApplicationRole != RoleViewer {
+		t.Fatalf("one-time fence re-granted owner: %q", uow.activeMembership.ApplicationRole)
+	}
+}
+
 func TestOwnerBootstrapDoesNotPromoteArbitraryAdminWithoutCreatorSignal(t *testing.T) {
 	uow := newFakeUnitOfWork()
 	uow.organizationFound = true
-	uow.organization = Organization{ID: testOrganizationID, Status: "active"}
+	uow.organization = Organization{
+		ID: testOrganizationID, Status: "active", OwnerBootstrapEligible: true,
+	}
 	uow.activeFound = true
 	uow.activeMembership = Membership{
 		ID: testMembershipID, OrganizationID: testOrganizationID,
@@ -120,6 +243,7 @@ func TestOwnerBootstrapRejectsCreatorMismatch(t *testing.T) {
 	uow.organizationFound = true
 	uow.organization = Organization{
 		ID: testOrganizationID, Status: "active", ClerkCreatedByUserID: &storedCreator,
+		OwnerBootstrapEligible: true,
 	}
 	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
 	event := organizationEvent(EventOrganizationUpdated)
