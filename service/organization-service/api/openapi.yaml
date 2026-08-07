@@ -170,7 +170,7 @@ components:
       description: Stable Bearer authentication challenge without token-validation details.
       schema: { type: string, const: 'Bearer realm="bridgeworks"' }
     RetryAfter:
-      description: Suggested retry delay in seconds for eventual-consistency lag.
+      description: Suggested retry delay in seconds. Present for organization_not_ready eventual-consistency conflicts; lifecycle conflicts do not emit it.
       schema: { type: integer, const: 2 }
   responses:
     Unauthorized:
@@ -203,11 +203,14 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
     VerificationConflict:
-      description: Verification is already verified or otherwise cannot be requested from its current BridgeWorks lifecycle state. Eventual-consistency conflicts still use organization_not_ready and Retry-After.
+      description: Verification is already verified or otherwise cannot be requested from its current BridgeWorks lifecycle state. The same endpoint can also return organization_not_ready while the verified Clerk organization is waiting for local projection.
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
         Cache-Control: { $ref: "#/components/headers/NoStore" }
         Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        Retry-After:
+          description: Present with value 2 only when the conflict code is organization_not_ready. It is omitted for verification_transition_not_allowed.
+          schema: { type: integer, const: 2 }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
