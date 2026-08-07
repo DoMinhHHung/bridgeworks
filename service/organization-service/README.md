@@ -98,13 +98,34 @@ owner_bootstrap_eligible = true
 
 The migration first adds `owner_bootstrap_eligible boolean not null default false`, so every pre-existing row is materialized as ineligible, and only then changes the column default to `true` for future inserts. The real PostgreSQL migration regression verifies both sides of that default transition.
 
-For an eligible newly projected provider organization, Organization Service consumes `created_by` only from the **verified Clerk organization webhook payload** and stores it as private provider metadata. Owner bootstrap completes only when every gate is true:
+`owner_bootstrap_eligible=true` means only that the automatic **initial** owner grant is still permitted. It is not an ownership fact and it is not a reusable authorization credential. `owner_bootstrapped=true` has one meaning only: the automatic initial-owner bootstrap succeeded.
+
+For an eligible newly projected provider organization, Organization Service consumes `created_by` only from the **verified Clerk organization webhook payload** and stores it as private provider metadata. The decision is made inside the existing organization-scoped webhook transaction/advisory-lock boundary.
+
+Before any promotion, synchronization checks deleted membership history for the exact creator:
+
+```text
+creator has never had a projected membership:
+    keep owner_bootstrap_eligible = true
+    wait for the first membership webhook
+
+creator has deleted membership history before bootstrap completion:
+    owner_bootstrap_eligible = false
+    owner_bootstrapped = false
+    never auto-promote that historical creator
+
+creator has an active membership and no deleted membership history:
+    continue evaluating the normal bootstrap gates
+```
+
+Owner bootstrap succeeds only when every gate is true:
 
 ```text
 owner_bootstrap_eligible = true
 owner_bootstrapped = false
 organization lifecycle = active
 authoritative created_by exists
+no deleted membership history exists for the exact creator
 exact creator has an active local membership projection
 ```
 
@@ -115,15 +136,24 @@ local application_role = owner
 owner_bootstrapped = true
 ```
 
-Organization and membership webhook delivery can race in either order. The existing organization-scoped advisory lock serializes both paths. If the organization event arrives first, the creator signal waits for the membership. If the membership arrives first, it creates an eligible pending local organization and initially uses the compatibility role mapping; the later verified organization projection activates the organization and promotes only the exact creator.
+Organization and membership webhook delivery can race in either order. The existing organization-scoped advisory lock serializes both paths. If the organization event arrives first and the creator has never had a membership, the creator signal waits for that first membership. If the membership arrives first, it creates an eligible pending local organization and initially uses the compatibility role mapping; the later verified organization projection activates the organization and promotes only the exact creator when no deleted history exists.
 
-An inactive/deleted creator membership does not complete owner bootstrap. Disabled or deleted organizations do not complete owner bootstrap either.
+Deleted membership history before successful bootstrap permanently cancels the automatic opportunity by transitioning only:
+
+```text
+owner_bootstrap_eligible: true -> false
+owner_bootstrapped:       false -> false
+```
+
+This applies whether the creator is already known when their membership is deleted or whether the verified `created_by` metadata arrives after a deleted creator membership was already projected. A later invitation or rejoin with a new Clerk membership ID does **not** restore eligibility and initializes only through the normal compatibility role mapping. Historical `created_by` therefore never becomes a perpetual privilege-escalation token.
+
+Disabled or deleted organizations do not complete owner bootstrap. A deleted creator membership cannot complete it either; deleted history permanently cancels the automatic path as described above.
 
 The bootstrap marker is a one-time fence after a successful bootstrap. If a future explicit BridgeWorks role change moves that membership away from `owner`, later provider organization events do not re-grant owner.
 
 Legacy organizations are permanently ineligible for this automatic bootstrap path. A later verified Clerk organization payload may safely project its historical `created_by` metadata, but it **must not** promote that historical creator from local `viewer` or `admin` to `owner`. Existing legacy `admin` and `viewer` application roles remain unchanged. `admin` keeps its compatibility administration permissions so legacy organizations are not locked out, but `admin` is not semantically treated as `owner`.
 
-Explicit ownership assignment for legacy organizations is deferred to a future reviewed authorization flow; PR 2 does not guess it from provider history.
+Explicit ownership assignment for legacy organizations, rejoining historical creators, and all later ownership changes belong to a future reviewed local role-management authorization boundary; PR 2 does not infer ownership from provider history.
 
 Clients cannot supply `role=owner`, `created_by`, `owner_bootstrap_eligible`, or the bootstrap marker.
 
@@ -309,7 +339,7 @@ PR 2 does not implement general role mutation, last-owner/self-demotion/leave ru
 4. acquire organization-scoped transaction advisory lock;
 5. load latest competing event for the exact aggregate;
 6. classify stale events by timestamp, delete > update > create, then lexical event ID;
-7. apply provider projection and, for eligible post-v3 organizations only, one-time exact-creator owner bootstrap;
+7. apply provider projection and, for eligible post-v3 organizations only, either perform the one-time exact-creator owner bootstrap or permanently cancel its eligibility when deleted creator membership history exists;
 8. commit only after all projection work succeeds.
 
 Membership inserts retain the `SAVEPOINT membership_insert` boundary. Only `memberships_clerk_membership_id_uq` and `memberships_active_organization_user_uq` have explicit conflict recovery; unrelated unique violations still roll back the transaction and inbox insertion.
@@ -371,7 +401,7 @@ golangci-lint run ./...
 go tool cover -func=coverage.out
 ```
 
-Organization CI also runs real PostgreSQL migration upgrades, including v2 legacy admin/viewer rows and the post-v3 eligibility default; a signed Clerk regression against that same migrated legacy row; both organization-first and membership-first owner-bootstrap orderings; lifecycle/inactive-membership/one-time-fence checks; APISIX onboarding ownership regression; duplicate/stale handling; membership conflict/concurrency/savepoint regressions; projection-ownership checks; unrelated-unique rollback; dependency outage/recovery; and private-port isolation.
+Organization CI also runs real PostgreSQL migration upgrades, including v2 legacy admin/viewer rows and the post-v3 eligibility default; a signed Clerk regression against that same migrated legacy row; both successful organization-first and membership-first owner-bootstrap orderings; creator deleted-history cancellation and fresh-membership rejoin no-owner regression; lifecycle/one-time-fence checks; APISIX onboarding ownership regression; duplicate/stale handling; membership conflict/concurrency/savepoint regressions; projection-ownership checks; unrelated-unique rollback; dependency outage/recovery; and private-port isolation.
 
 ## PR 2 non-goals
 
