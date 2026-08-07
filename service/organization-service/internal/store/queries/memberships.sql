@@ -12,12 +12,13 @@ WHERE organization_id = $1
   AND clerk_user_id = $2
   AND status = 'active';
 
--- name: HasMembershipByOrganizationUser :one
+-- name: HasDeletedMembershipByOrganizationUser :one
 SELECT EXISTS (
     SELECT 1
     FROM organization.memberships
     WHERE organization_id = $1
       AND clerk_user_id = $2
+      AND status = 'deleted'
 );
 
 -- name: InsertMembership :one
