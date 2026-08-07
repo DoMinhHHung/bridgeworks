@@ -54,7 +54,8 @@ func TestDomainMigrationUpgradesExistingRowsSafely(t *testing.T) {
 	}
 
 	const organizationID = "018f0c76-8f6c-7cc4-8000-000000000021"
-	const membershipID = "018f0c76-8f6c-7cc4-8000-000000000022"
+	const viewerMembershipID = "018f0c76-8f6c-7cc4-8000-000000000022"
+	const adminMembershipID = "018f0c76-8f6c-7cc4-8000-000000000023"
 	if _, err := db.ExecContext(ctx, `
 		insert into organization.organizations (
 			id, clerk_organization_id, name, slug, status
@@ -66,9 +67,11 @@ func TestDomainMigrationUpgradesExistingRowsSafely(t *testing.T) {
 		insert into organization.memberships (
 			id, clerk_membership_id, organization_id, clerk_user_id,
 			clerk_role, application_role, status
-		) values ($1, 'mem-migration-existing', $2, 'user-migration-existing', 'org:member', 'viewer', 'active')
-	`, membershipID, organizationID); err != nil {
-		t.Fatalf("seed existing membership: %v", err)
+		) values
+			($1, 'mem-migration-viewer', $3, 'user-migration-viewer', 'org:member', 'viewer', 'active'),
+			($2, 'mem-migration-admin', $3, 'user-migration-admin', 'org:admin', 'admin', 'active')
+	`, viewerMembershipID, adminMembershipID, organizationID); err != nil {
+		t.Fatalf("seed existing memberships: %v", err)
 	}
 
 	if _, err := provider.UpTo(ctx, 2); err != nil {
@@ -112,17 +115,8 @@ func TestDomainMigrationUpgradesExistingRowsSafely(t *testing.T) {
 		t.Fatal("new optional product fields must remain null for existing rows")
 	}
 
-	var applicationRole string
-	if err := db.QueryRowContext(ctx, `
-		select application_role
-		from organization.memberships
-		where id = $1
-	`, membershipID).Scan(&applicationRole); err != nil {
-		t.Fatalf("read migrated membership: %v", err)
-	}
-	if applicationRole != "viewer" {
-		t.Fatalf("existing application role = %q, want viewer", applicationRole)
-	}
+	assertLegacyApplicationRole(t, ctx, db, viewerMembershipID, "viewer")
+	assertLegacyApplicationRole(t, ctx, db, adminMembershipID, "admin")
 
 	assertStringSet(t, ctx, db,
 		"select key from organization.roles order by key",
@@ -187,6 +181,27 @@ func TestDomainMigrationUpgradesExistingRowsSafely(t *testing.T) {
 	}
 	if publicGrantCount != 0 {
 		t.Fatalf("PUBLIC table grants = %d, want 0", publicGrantCount)
+	}
+}
+
+func assertLegacyApplicationRole(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	membershipID string,
+	want string,
+) {
+	t.Helper()
+	var got string
+	if err := db.QueryRowContext(ctx, `
+		select application_role
+		from organization.memberships
+		where id = $1
+	`, membershipID).Scan(&got); err != nil {
+		t.Fatalf("read migrated membership role: %v", err)
+	}
+	if got != want {
+		t.Fatalf("existing application role = %q, want %q", got, want)
 	}
 }
 
