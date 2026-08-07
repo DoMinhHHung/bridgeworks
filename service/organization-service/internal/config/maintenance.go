@@ -8,15 +8,15 @@ import (
 )
 
 const (
-	defaultMaintenanceDatabaseConnectTimeout = 5 * time.Second
-	defaultMaintenanceCommandTimeout         = 30 * time.Second
-	maximumMaintenanceCommandTimeout         = 2 * time.Minute
-	defaultInvitationRetention               = 30 * 24 * time.Hour
-	minimumInvitationRetention               = 24 * time.Hour
-	defaultRemovalReconcileAfter              = 15 * time.Minute
-	minimumRemovalReconcileAfter              = time.Minute
-	defaultMaintenanceBatchSize         int32 = 100
-	maximumMaintenanceBatchSize         int32 = 500
+	defaultMaintenanceDatabaseConnectTimeout       = 5 * time.Second
+	defaultMaintenanceCommandTimeout               = 30 * time.Second
+	maximumMaintenanceCommandTimeout               = 2 * time.Minute
+	defaultInvitationRetention                     = 30 * 24 * time.Hour
+	minimumInvitationRetention                     = 24 * time.Hour
+	defaultRemovalReconcileAfter                   = 15 * time.Minute
+	minimumRemovalReconcileAfter                   = time.Minute
+	defaultMaintenanceBatchSize              int32 = 100
+	maximumMaintenanceBatchSize              int32 = 500
 )
 
 type MaintenanceConfig struct {
