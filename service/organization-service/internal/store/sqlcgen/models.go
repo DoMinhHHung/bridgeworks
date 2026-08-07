@@ -9,6 +9,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type OrganizationAuditEvent struct {
+	ID                  uuid.UUID
+	OrganizationID      uuid.UUID
+	EventType           string
+	ActorKind           string
+	ActorIdentityUserID pgtype.UUID
+	ActorMembershipID   pgtype.UUID
+	SubjectMembershipID pgtype.UUID
+	FromValue           *string
+	ToValue             *string
+	OccurredAt          pgtype.Timestamptz
+}
+
 type OrganizationClerkWebhookEvent struct {
 	EventID             string
 	EventType           string
