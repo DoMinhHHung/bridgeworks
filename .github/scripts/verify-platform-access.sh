@@ -86,6 +86,7 @@ test -s "${auth_work}/platform-access.token"
 private_request() {
   local request_id="$1" prefix="$2" forged="${3:-false}"
   docker run --rm \
+    --user "$(id -u):$(id -g)" \
     --network "${network}" \
     --volume "${auth_work}:/auth:ro" \
     --volume "${work}:/work" \
