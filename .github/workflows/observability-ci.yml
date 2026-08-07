@@ -53,8 +53,9 @@ jobs:
             service/identity-service/migrations/000001_create_app_users.sql \
             service/organization-service/migrations/000001_create_organization_foundation.sql \
             service/organization-service/migrations/000002_complete_organization_domain.sql \
-            service/organization-service/migrations/000003_add_owner_bootstrap_state.sql
-          test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
+            service/organization-service/migrations/000003_add_owner_bootstrap_state.sql \
+            service/organization-service/migrations/000004_add_membership_administration.sql
+          test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "2"
           test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "4"
 
       - name: Verify private observability topology and bounded contracts
