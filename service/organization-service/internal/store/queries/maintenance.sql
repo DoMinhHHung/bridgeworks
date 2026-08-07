@@ -3,9 +3,9 @@ WITH candidates AS (
     SELECT id
     FROM organization.membership_invitation_intents
     WHERE consumed_at IS NOT NULL
-      AND consumed_at < $1::timestamptz
+      AND consumed_at < sqlc.arg(cutoff)::timestamptz
     ORDER BY consumed_at ASC, id ASC
-    LIMIT $2
+    LIMIT sqlc.arg(result_limit)
 )
 DELETE FROM organization.membership_invitation_intents i
 USING candidates c
@@ -23,9 +23,9 @@ JOIN organization.memberships m
  AND m.organization_id = r.organization_id
 JOIN organization.organizations o
   ON o.id = r.organization_id
-WHERE r.created_at < $1::timestamptz
+WHERE r.created_at < sqlc.arg(cutoff)::timestamptz
 ORDER BY r.created_at ASC, r.membership_id ASC
-LIMIT $2;
+LIMIT sqlc.arg(result_limit);
 
 -- name: LockRemovalIntentForMaintenance :one
 SELECT m.id,
