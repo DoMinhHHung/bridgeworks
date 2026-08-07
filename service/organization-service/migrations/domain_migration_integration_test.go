@@ -173,7 +173,7 @@ func TestDomainMigrationUpgradesExistingRowsSafely(t *testing.T) {
 	var publicGrantCount int
 	if err := db.QueryRowContext(ctx, `
 		select count(*)
-		from information_schema.role_table_grants
+		from information_schema.table_privileges
 		where table_schema = 'organization'
 		  and grantee = 'PUBLIC'
 	`).Scan(&publicGrantCount); err != nil {
