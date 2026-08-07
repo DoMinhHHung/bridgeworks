@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+phase=bootstrap
+trap 'printf "PR3 integration failed phase=%s line=%s\n" "${phase}" "${LINENO}" >&2' ERR
 
 set -a
 source .env
@@ -125,6 +128,7 @@ PY
 }
 
 # Run an isolated Clerk Backend API mock on the existing private Compose network.
+phase=provider-mock-startup
 (
   cd service/organization-service
   go build -o "${work}/clerk-backend-mock" ../../.github/scripts/clerk-backend-mock.go
@@ -134,12 +138,14 @@ docker run --detach --name "${mock_name}" --network "${network}" \
   --env "CLERK_BACKEND_MOCK_SECRET=${CLERK_SECRET_KEY}" \
   --volume "${work}/clerk-backend-mock:/usr/local/bin/clerk-backend-mock:ro" \
   debian:bookworm-slim /usr/local/bin/clerk-backend-mock >/dev/null
+export CLERK_BACKEND_API_URL='http://bridgeworks-clerk-backend-mock:8081'
 sed -i 's|^CLERK_BACKEND_API_URL=.*$|CLERK_BACKEND_API_URL=http://bridgeworks-clerk-backend-mock:8081|' .env
 docker compose up --detach --force-recreate organization-service
 curl --retry 30 --retry-all-errors --retry-delay 1 --fail --show-error --silent \
   "${base_url}/api/v1/organizations/health/ready" >/dev/null
 
 # Identity projections. primary_email is authoritative only when the Clerk address is verified.
+phase=identity-projections
 cat > "${work}/identity-owner.json" <<'JSON'
 {"type":"user.created","timestamp":1785750000000,"data":{"id":"user_pr3_owner","primary_email_address_id":"email_pr3_owner","email_addresses":[{"id":"email_pr3_owner","email_address":"owner@Acme.Example","verification":{"status":"verified"}}]}}
 JSON
@@ -166,6 +172,7 @@ for name in owner admin viewer recruiter delivery personal unverified; do
 done
 
 # Main organization: verified creator -> exact initial owner; later org:admin stays local admin.
+phase=main-organization
 cat > "${work}/org-main.json" <<'JSON'
 {"type":"organization.created","timestamp":1785750010000,"data":{"id":"org_pr3_main","name":"PR3 Main","slug":"pr3-main","created_by":"user_pr3_owner"}}
 JSON
@@ -189,6 +196,7 @@ sign_token user_pr3_owner sess_pr3_owner org_pr3_main "${auth_work}/pr3-owner.to
 sign_token user_pr3_admin sess_pr3_admin org_pr3_main "${auth_work}/pr3-admin.token"
 
 # Initial point-in-time business-email proof is separate from company verification_status.
+phase=business-email-initial
 assert_status "$(request_json POST "${business_email_url}" "${auth_work}/pr3-owner.token" pr3-business-owner '{}' "${work}/business-owner-body" "${work}/business-owner-headers")" "200"
 python3 - "${work}/business-owner-body" <<'PY'
 import json, sys
@@ -199,6 +207,7 @@ PY
 test "$(organization_sql "select business_email_domain, verification_status from organization.organizations where clerk_organization_id='org_pr3_main'")" = "acme.example|unverified"
 
 # Personal and unverified Identity projections cannot establish business proof.
+phase=business-email-negative
 cat > "${work}/mem-personal.json" <<'JSON'
 {"type":"organizationMembership.created","timestamp":1785750013000,"data":{"id":"mem_pr3_personal","organization":{"id":"org_pr3_main"},"public_user_data":{"user_id":"user_pr3_personal"},"role":"org:admin"}}
 JSON
@@ -215,6 +224,7 @@ assert_status "$(request_json POST "${business_email_url}" "${auth_work}/pr3-unv
 grep --quiet '"code":"verified_primary_email_required"' "${work}/business-unverified-body"
 
 # Owner invitation creates only local intent + Clerk invitation. Membership remains absent until signed provider projection.
+phase=invitation-reconciliation
 assert_status "$(request_json POST "${invitation_url}" "${auth_work}/pr3-owner.token" pr3-invite-viewer '{"email":"viewer@acme.example","application_role":"viewer"}' "${work}/invite-viewer-body" "${work}/invite-viewer-headers")" "202"
 viewer_intent_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${work}/invite-viewer-body")"
 test "$(organization_sql "select count(*) from organization.memberships where organization_id=(select id from organization.organizations where clerk_organization_id='org_pr3_main') and clerk_user_id='user_pr3_viewer' and status='active'")" = "0"
@@ -228,6 +238,7 @@ test "$(organization_sql "select consumed_membership_id is not null from organiz
 sign_token user_pr3_viewer sess_pr3_viewer org_pr3_main "${auth_work}/pr3-viewer.token"
 
 # Admin can invite non-owner but never owner. Owner can establish recruiter/delivery members; none can invite.
+phase=invitation-policy
 assert_status "$(request_json POST "${invitation_url}" "${auth_work}/pr3-admin.token" pr3-invite-recruiter '{"email":"recruiter@acme.example","application_role":"recruiter"}' "${work}/invite-recruiter-body" "${work}/invite-recruiter-headers")" "202"
 recruiter_intent_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${work}/invite-recruiter-body")"
 cat > "${work}/mem-recruiter.json" <<JSON
@@ -254,6 +265,7 @@ done
 assert_status "$(request_json POST "${invitation_url}" "${auth_work}/pr3-owner.token" pr3-invite-cross-tenant '{"organization_id":"org_pr3_foreign","email":"nobody@company.example","application_role":"viewer"}' "${work}/invite-cross-body" "${work}/invite-cross-headers")" "400"
 
 # Local role authority: admin may manage non-owner only; owner-only owner transitions.
+phase=role-policy
 assert_status "$(request_json PATCH "${current_url}/members/${viewer_membership_id}/role" "${auth_work}/pr3-admin.token" pr3-role-viewer-recruiter '{"application_role":"recruiter"}' "${work}/role-viewer-body" "${work}/role-viewer-headers")" "204"
 test "$(organization_sql "select application_role from organization.memberships where id='${viewer_membership_id}'")" = "recruiter"
 assert_status "$(request_json PATCH "${current_url}/members/${admin_membership_id}/role" "${auth_work}/pr3-admin.token" pr3-admin-self-owner '{"application_role":"owner"}' "${work}/admin-self-owner-body" "${work}/admin-self-owner-headers")" "403"
@@ -263,6 +275,7 @@ test "$(organization_sql "select count(*) from organization.memberships where or
 assert_status "$(request_json PATCH "${current_url}/members/${admin_membership_id}/role" "${auth_work}/pr3-owner.token" pr3-role-invalid '{"application_role":"super_owner"}' "${work}/role-invalid-body" "${work}/role-invalid-headers")" "400"
 
 # Real email-change/re-verification regression on an active local owner.
+phase=business-email-reverification
 cat > "${work}/identity-viewer-company-a.json" <<'JSON'
 {"type":"user.updated","timestamp":1785750023000,"data":{"id":"user_pr3_viewer","primary_email_address_id":"email_pr3_viewer_a","email_addresses":[{"id":"email_pr3_viewer_a","email_address":"owner@company-a.example","verification":{"status":"verified"}}]}}
 JSON
@@ -294,6 +307,7 @@ grep --quiet '"code":"verified_primary_email_required"' "${work}/business-no-ver
 test "$(organization_sql "select business_email_domain, business_email_verified_at::text from organization.organizations where clerk_organization_id='org_pr3_main'")" = "company-b.example|${proof_b_at}"
 
 # Foreign membership IDs never escape the actor organization boundary.
+phase=cross-tenant-setup
 cat > "${work}/identity-foreign.json" <<'JSON'
 {"type":"user.created","timestamp":1785750030000,"data":{"id":"user_pr3_foreign","primary_email_address_id":"email_pr3_foreign","email_addresses":[{"id":"email_pr3_foreign","email_address":"foreign@other.example","verification":{"status":"verified"}}]}}
 JSON
@@ -309,6 +323,7 @@ assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION
 foreign_membership_id="$(organization_sql "select id from organization.memberships where clerk_membership_id='mem_pr3_foreign'")"
 
 # A pending intent from Org A cannot grant its local role to a signed membership projection in Org B.
+phase=cross-org-intent
 assert_status "$(request_json POST "${invitation_url}" "${auth_work}/pr3-owner.token" pr3-cross-intent-create '{"email":"cross-intent@company.example","application_role":"delivery_manager"}' "${work}/cross-intent-create-body" "${work}/cross-intent-create-headers")" "202"
 cross_intent_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${work}/cross-intent-create-body")"
 cat > "${work}/mem-cross-intent.json" <<JSON
@@ -323,6 +338,7 @@ assert_status "$(request_json DELETE "${current_url}/members/${foreign_membershi
 assert_status "$(request_json POST "${transfer_url}" "${auth_work}/pr3-owner.token" pr3-cross-transfer "{\"target_membership_id\":\"${foreign_membership_id}\"}" "${work}/cross-transfer-body" "${work}/cross-transfer-headers")" "404"
 
 # Last-owner self-demotion/leave are rejected before provider mutation.
+phase=last-owner
 cat > "${work}/identity-last.json" <<'JSON'
 {"type":"user.created","timestamp":1785750040000,"data":{"id":"user_pr3_last","primary_email_address_id":"email_pr3_last","email_addresses":[{"id":"email_pr3_last","email_address":"last@company.example","verification":{"status":"verified"}}]}}
 JSON
@@ -342,6 +358,7 @@ assert_status "$(request_json DELETE "${current_url}/membership" "${auth_work}/p
 test "$(organization_sql "select count(*) from organization.membership_removal_intents where membership_id='${last_membership_id}'")" = "0"
 
 # Atomic ownership transfer: target becomes owner before actor is demoted, one transaction, never zero owner.
+phase=ownership-transfer
 cat > "${work}/identity-transfer.json" <<'JSON'
 {"type":"user.created","timestamp":1785750043000,"data":{"id":"user_pr3_transfer","primary_email_address_id":"email_pr3_transfer","email_addresses":[{"id":"email_pr3_transfer","email_address":"transfer@company.example","verification":{"status":"verified"}}]}}
 JSON
@@ -357,6 +374,7 @@ test "$(organization_sql "select application_role from organization.memberships 
 test "$(organization_sql "select application_role from organization.memberships where id='${transfer_membership_id}'")" = "owner"
 
 # Two-owner leave: reservation immediately removes authorization; signed provider delete finalizes local projection.
+phase=removal-pending
 assert_status "$(request_json DELETE "${current_url}/membership" "${auth_work}/pr3-owner.token" pr3-owner-leave '' "${work}/owner-leave-body" "${work}/owner-leave-headers")" "202"
 test "$(organization_sql "select count(*) from organization.membership_removal_intents where membership_id='${owner_membership_id}'")" = "1"
 test "$(organization_sql "select status from organization.memberships where id='${owner_membership_id}'")" = "active"
@@ -372,6 +390,7 @@ test "$(organization_sql "select count(*) from organization.memberships where or
 assert_actor_mutations_forbidden "${auth_work}/pr3-owner.token" pr3-deleted-actor "${admin_membership_id}"
 
 # Historical creator deleted before bootstrap stays permanently ineligible when invited with a fresh membership ID.
+phase=creator-rejoin
 cat > "${work}/identity-rejoin-creator.json" <<'JSON'
 {"type":"user.created","timestamp":1785750060000,"data":{"id":"user_pr3_rejoin_creator","primary_email_address_id":"email_pr3_rejoin_creator","email_addresses":[{"id":"email_pr3_rejoin_creator","email_address":"creator-rejoin@company.example","verification":{"status":"verified"}}]}}
 JSON
@@ -408,6 +427,7 @@ assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION
 test "$(organization_sql "select m.application_role, o.owner_bootstrap_eligible, o.owner_bootstrapped, (select count(*) from organization.memberships owners where owners.organization_id=o.id and owners.status='active' and owners.application_role='owner') from organization.organizations o join organization.memberships m on m.organization_id=o.id and m.clerk_membership_id='mem_pr3_rejoin_new' where o.clerk_organization_id='org_pr3_rejoin'")" = "viewer|f|f|0"
 
 # An unrelated Identity update never silently mutates the explicit historical Organization proof.
+phase=identity-update-fence
 cat > "${work}/identity-owner-updated.json" <<'JSON'
 {"type":"user.updated","timestamp":1785750070000,"data":{"id":"user_pr3_owner","primary_email_address_id":"email_pr3_owner_new","email_addresses":[{"id":"email_pr3_owner_new","email_address":"owner@newco.example","verification":{"status":"verified"}}]}}
 JSON
@@ -424,6 +444,7 @@ assert all('clerk' not in key for key in body)
 PY
 
 # CORS/preflight coverage for every newly public exact route.
+phase=cors
 for route_method in \
   "${business_email_url}|POST" \
   "${invitation_url}|POST" \
@@ -441,6 +462,8 @@ for route_method in \
   test "${status}" = "200" -o "${status}" = "204"
 done
 
+phase=log-leak-scan
 assert_no_sensitive_logs
 
+phase=complete
 echo "Organization membership administration and business verification integration tests passed."
