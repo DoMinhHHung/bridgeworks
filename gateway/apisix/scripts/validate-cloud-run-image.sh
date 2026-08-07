@@ -45,9 +45,22 @@ grep --quiet 'refresh_retry_seconds' \
 grep --quiet '@sha256:0e5377839f4ff5e322a5686ab6ce6797ba768008aca1bfc9b71149c3b326c4df' \
   "${context_dir}/Dockerfile" ||
   fail "APISIX base image digest is not pinned"
-grep --quiet '^[[:space:]]*uri: /health/live$' \
-  "${context_dir}/conf/apisix.cloud-run.yaml" ||
+
+if ! awk '
+  /^  - id: bridgeworks-gateway-health[[:space:]]*$/ {
+    in_health=1
+    next
+  }
+  in_health && /^  - id: / {
+    exit(found ? 0 : 1)
+  }
+  in_health && /^[[:space:]]*uri:[[:space:]]*\/health\/live[[:space:]]*$/ {
+    found=1
+  }
+  END { if (!found) exit 1 }
+' "${context_dir}/conf/apisix.cloud-run.yaml"; then
   fail "Cloud Run gateway health route must use /health/live"
+fi
 
 if grep -Eq '^[[:space:]]*uri:[[:space:]]+[^[:space:]]*z[[:space:]]*$' \
   "${context_dir}/conf/apisix.cloud-run.yaml"; then
