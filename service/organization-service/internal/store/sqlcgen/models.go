@@ -36,7 +36,7 @@ type OrganizationMembershipInvitationIntent struct {
 	OrganizationID          uuid.UUID
 	ApplicationRole         string
 	CreatedByIdentityUserID uuid.UUID
-	ConsumedMembershipID    *uuid.UUID
+	ConsumedMembershipID    pgtype.UUID
 	ConsumedAt              pgtype.Timestamptz
 	CreatedAt               pgtype.Timestamptz
 	UpdatedAt               pgtype.Timestamptz
@@ -61,5 +61,5 @@ type OrganizationOrganization struct {
 	OwnerBootstrapEligible        bool
 	BusinessEmailDomain           *string
 	BusinessEmailVerifiedAt       pgtype.Timestamptz
-	BusinessEmailVerifiedByUserID *uuid.UUID
+	BusinessEmailVerifiedByUserID pgtype.UUID
 }
