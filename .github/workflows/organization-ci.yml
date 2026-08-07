@@ -100,7 +100,10 @@ jobs:
           set -euo pipefail
           cd service/organization-service
           unformatted="$(find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
-          test -z "${unformatted}"
+          if [[ -n "${unformatted}" ]]; then
+            printf 'Unformatted Go files:\n%s\n' "${unformatted}" >&2
+            exit 1
+          fi
           go mod tidy -diff
           go vet ./...
           go test -race -coverprofile=coverage.out ./...
