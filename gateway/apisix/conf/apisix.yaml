@@ -143,20 +143,117 @@ routes:
       timeout: { connect: 1, send: 5, read: 5 }
       nodes: { "organization-service:8080": 1 }
 
-  - id: bridgeworks-organization-current-membership
-    name: bridgeworks-organization-current-membership
-    uri: /api/v1/organizations/current/membership
-    methods: [GET, OPTIONS]
+  - id: bridgeworks-organization-current-business-email-verification
+    name: bridgeworks-organization-current-business-email-verification
+    uri: /api/v1/organizations/current/business-email-verification
+    methods: [POST, OPTIONS]
     plugins:
       request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
       cors:
         allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
-        allow_methods: "GET,OPTIONS"
+        allow_methods: "POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /organizations/current/business-email-verification }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current-invitations
+    name: bridgeworks-organization-current-invitations
+    uri: /api/v1/organizations/current/invitations
+    methods: [POST, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /organizations/current/invitations }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current-membership
+    name: bridgeworks-organization-current-membership
+    uri: /api/v1/organizations/current/membership
+    methods: [GET, DELETE, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "GET,DELETE,OPTIONS"
         allow_headers: "Authorization,Content-Type,X-Request-Id"
         expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
         max_age: 600
         allow_credential: false
       proxy-rewrite: { uri: /organizations/current/membership }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current-member-role
+    name: bridgeworks-organization-current-member-role
+    uri: /api/v1/organizations/current/members/*/role
+    methods: [PATCH, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "PATCH,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite:
+        regex_uri: ["^/api/v1/organizations/current/members/(.*)/role$", "/organizations/current/members/$1/role"]
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current-member-remove
+    name: bridgeworks-organization-current-member-remove
+    uri: /api/v1/organizations/current/members/*
+    methods: [DELETE, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "DELETE,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite:
+        regex_uri: ["^/api/v1/organizations/current/members/(.*)$", "/organizations/current/members/$1"]
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-organization-current-ownership-transfer
+    name: bridgeworks-organization-current-ownership-transfer
+    uri: /api/v1/organizations/current/ownership-transfer
+    methods: [POST, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /organizations/current/ownership-transfer }
     upstream:
       type: roundrobin
       timeout: { connect: 1, send: 5, read: 5 }
