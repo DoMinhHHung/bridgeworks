@@ -274,4 +274,6 @@ for forbidden in [
     assert forbidden not in logs, f'organization log leaked {forbidden[:24]!r}'
 PY
 
+bash .github/scripts/verify-organization-membership-administration.sh
+
 echo "Organization onboarding ownership integration tests passed."
