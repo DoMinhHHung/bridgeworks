@@ -138,8 +138,15 @@ docker run --detach --name "${mock_name}" --network "${network}" \
   --env "CLERK_BACKEND_MOCK_SECRET=${CLERK_SECRET_KEY}" \
   --volume "${work}/clerk-backend-mock:/usr/local/bin/clerk-backend-mock:ro" \
   debian:bookworm-slim /usr/local/bin/clerk-backend-mock >/dev/null
-export CLERK_BACKEND_API_URL='http://bridgeworks-clerk-backend-mock:8081'
-sed -i 's|^CLERK_BACKEND_API_URL=.*$|CLERK_BACKEND_API_URL=http://bridgeworks-clerk-backend-mock:8081|' .env
+mock_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${mock_name}")"
+test -n "${mock_ip}"
+python3 - "${mock_ip}" <<'PY'
+import ipaddress, sys
+address = ipaddress.ip_address(sys.argv[1])
+assert address.is_private, f'Clerk mock IP must be private: {address}'
+PY
+export CLERK_BACKEND_API_URL="http://${mock_ip}:8081"
+sed -i "s|^CLERK_BACKEND_API_URL=.*$|CLERK_BACKEND_API_URL=${CLERK_BACKEND_API_URL}|" .env
 docker compose up --detach --force-recreate organization-service
 curl --retry 30 --retry-all-errors --retry-delay 1 --fail --show-error --silent \
   "${base_url}/api/v1/organizations/health/ready" >/dev/null
