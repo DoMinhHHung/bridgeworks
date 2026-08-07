@@ -12,11 +12,14 @@ import (
 	"syscall"
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authn"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/businessverification"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/clerkorganizationadmin"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/clerkwebhook"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/config"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/currentorganization"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/httpapi"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/identityclient"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/membershipadmin"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/observability"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationid"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationonboarding"
@@ -112,6 +115,16 @@ func run() error {
 	}
 	defer identity.CloseIdleConnections()
 
+	membershipProvider, err := clerkorganizationadmin.New(
+		cfg.ClerkSecretKey,
+		cfg.ClerkBackendAPIURL,
+		cfg.ClerkBackendAPITimeout,
+	)
+	if err != nil {
+		return err
+	}
+	defer membershipProvider.CloseIdleConnections()
+
 	verifier, err := clerkwebhook.NewVerifier(cfg.WebhookSigningSecret)
 	if err != nil {
 		return err
@@ -125,15 +138,23 @@ func run() error {
 	}
 
 	repository := store.New(database)
-	synchronizer := organizationsync.New(repository, organizationid.UUIDV7Generator{})
+	idGenerator := organizationid.UUIDV7Generator{}
+	synchronizer := organizationsync.New(repository, idGenerator)
 	currentService := currentorganization.New(identity, repository)
 	onboardingService := organizationonboarding.New(repository)
+	businessVerificationService, err := businessverification.New(repository, cfg.PersonalEmailDomains)
+	if err != nil {
+		return err
+	}
+	membershipAdministrationService := membershipadmin.New(repository, membershipProvider, idGenerator)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		ServiceName: cfg.ServiceName, Logger: logger, Metrics: metrics,
 		Readiness: database, ReadinessTimeout: cfg.DatabaseReadinessTimeout,
 		WebhookVerifier: verifier, WebhookProcessor: synchronizer,
 		WebhookMaxBytes: cfg.WebhookMaxBodyBytes, WebhookTimeout: cfg.WebhookProcessTimeout,
 		Authenticate: authenticate, CurrentResolver: currentService, Onboarding: onboardingService,
+		BusinessEmailVerification: businessVerificationService,
+		MembershipAdministration:  membershipAdministrationService,
 	})
 	server := &http.Server{
 		Addr: cfg.HTTPAddr, Handler: router,
@@ -182,6 +203,7 @@ func run() error {
 	shutdownErr := shutdownRuntime(shutdownContext, metricsServer, server, database.Close)
 	cleanupDatabase = false
 	identity.CloseIdleConnections()
+	membershipProvider.CloseIdleConnections()
 	if serveErr != nil {
 		return serveErr
 	}
