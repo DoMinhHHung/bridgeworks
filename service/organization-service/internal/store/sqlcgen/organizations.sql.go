@@ -256,15 +256,12 @@ func (q *Queries) UpdateOrganizationProductProfile(ctx context.Context, arg Upda
 	return i, err
 }
 
-const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :one
+const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :exec
 UPDATE organization.organizations
 SET name = $2,
     slug = $3,
     status = $4
 WHERE clerk_organization_id = $1
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
-          legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
 `
 
 type UpdateOrganizationProjectionParams struct {
@@ -274,32 +271,14 @@ type UpdateOrganizationProjectionParams struct {
 	Status              string
 }
 
-func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (OrganizationOrganization, error) {
-	row := q.db.QueryRow(ctx, updateOrganizationProjection,
+func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) error {
+	_, err := q.db.Exec(ctx, updateOrganizationProjection,
 		arg.ClerkOrganizationID,
 		arg.Name,
 		arg.Slug,
 		arg.Status,
 	)
-	var i OrganizationOrganization
-	err := row.Scan(
-		&i.ID,
-		&i.ClerkOrganizationID,
-		&i.Name,
-		&i.Slug,
-		&i.Status,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.LegalName,
-		&i.Website,
-		&i.Country,
-		&i.CompanyType,
-		&i.VerificationStatus,
-		&i.TrustStatus,
-		&i.ClerkCreatedByUserID,
-		&i.OwnerBootstrapped,
-	)
-	return i, err
+	return err
 }
 
 const updateOrganizationVerificationStatus = `-- name: UpdateOrganizationVerificationStatus :one
