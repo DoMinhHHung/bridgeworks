@@ -24,6 +24,7 @@ func NewRouter(
 	clerkProcessor ClerkWebhookOutcomeProcessor,
 	authenticate func(http.Handler) http.Handler,
 	currentUserGetter CurrentUserGetter,
+	platformAccessResolver PlatformAccessResolver,
 ) http.Handler {
 	if authenticate == nil {
 		authenticate = func(next http.Handler) http.Handler { return next }
@@ -48,6 +49,10 @@ func NewRouter(
 		),
 	)
 	router.With(currentUserResponseHeaders, authenticate).Get("/me", currentUserHandler(logger, currentUserGetter))
+	router.With(platformAccessResponseHeaders, authenticate).Get(
+		"/internal/v1/platform-access/me",
+		platformAccessHandler(logger, platformAccessResolver),
+	)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "route not found", nil)
