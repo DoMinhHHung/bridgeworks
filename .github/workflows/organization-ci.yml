@@ -77,6 +77,7 @@ jobs:
           grep --quiet "validateMembershipOwnership" service/organization-service/internal/organizationsync/service.go
           grep --quiet "inconsistent Clerk membership projection" service/organization-service/internal/organizationsync/service.go
           grep --quiet "CreatedBy" service/organization-service/internal/organizationsync/event.go
+          grep --quiet "OwnerBootstrapEligible" service/organization-service/internal/organizationsync/service.go
           grep --quiet "bootstrapInitialOwner" service/organization-service/internal/organizationsync/service.go
           grep --quiet "LockOrganizationByID" service/organization-service/internal/store/queries/organizations.sql
           grep --quiet "FOR UPDATE" service/organization-service/internal/store/queries/organizations.sql
@@ -211,7 +212,12 @@ jobs:
                 where table_schema='organization' and table_name='organizations'
                   and column_name='owner_bootstrapped'
               );
-            " | grep --count ' t' | grep --quiet '^9$'
+              select exists (
+                select 1 from information_schema.columns
+                where table_schema='organization' and table_name='organizations'
+                  and column_name='owner_bootstrap_eligible'
+              );
+            " | grep --count ' t' | grep --quiet '^10$'
 
       - name: Verify v1 through v3 Organization migrations
         shell: bash
@@ -250,6 +256,26 @@ jobs:
             --dbname postgres \
             --set ON_ERROR_STOP=1 \
             --command "drop database if exists ${test_database} with (force)"
+
+      - name: Prepare migrated legacy owner-bootstrap webhook fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+          postgres_id="$(docker compose ps -q organization-postgres)"
+          network="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${postgres_id}" | head -n 1)"
+          test -n "${network}"
+          fixture_url="postgres://${ORGANIZATION_POSTGRES_USER}:${ORGANIZATION_POSTGRES_PASSWORD}@organization-postgres:5432/${ORGANIZATION_POSTGRES_DB}?sslmode=disable"
+          docker run --rm \
+            --network "${network}" \
+            --volume "${PWD}:/src" \
+            --workdir /src/service/organization-service \
+            --env "ORGANIZATION_LEGACY_WEBHOOK_TEST_DATABASE_URL=${fixture_url}" \
+            golang:1.26.5-bookworm \
+            go test -race -run '^TestPrepareLegacyOwnerBootstrapWebhookFixture$' ./migrations
+          unset fixture_url
 
       - name: Start complete private stack
         run: make stack-up
