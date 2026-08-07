@@ -202,7 +202,7 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 	}
 
 	if event.Type == EventMembershipDeleted {
-		deletedMembershipID := uuid.Nil
+		var deletedMembershipID uuid.UUID
 		if !membershipFound {
 			id, err := s.newID("generate membership tombstone ID")
 			if err != nil {
