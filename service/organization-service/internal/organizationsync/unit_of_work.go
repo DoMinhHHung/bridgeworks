@@ -15,13 +15,14 @@ const (
 var ErrActiveMembershipConflict = errors.New("active organization membership conflict")
 
 type Organization struct {
-	ID                   uuid.UUID
-	ClerkOrganizationID  string
-	Name                 *string
-	Slug                 *string
-	Status               string
-	ClerkCreatedByUserID *string
-	OwnerBootstrapped    bool
+	ID                     uuid.UUID
+	ClerkOrganizationID    string
+	Name                   *string
+	Slug                   *string
+	Status                 string
+	ClerkCreatedByUserID   *string
+	OwnerBootstrapped      bool
+	OwnerBootstrapEligible bool
 }
 
 type Membership struct {
