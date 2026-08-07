@@ -66,22 +66,23 @@ func (q *Queries) GetMembershipByClerkID(ctx context.Context, clerkMembershipID 
 	return i, err
 }
 
-const hasMembershipByOrganizationUser = `-- name: HasMembershipByOrganizationUser :one
+const hasDeletedMembershipByOrganizationUser = `-- name: HasDeletedMembershipByOrganizationUser :one
 SELECT EXISTS (
     SELECT 1
     FROM organization.memberships
     WHERE organization_id = $1
       AND clerk_user_id = $2
+      AND status = 'deleted'
 )
 `
 
-type HasMembershipByOrganizationUserParams struct {
+type HasDeletedMembershipByOrganizationUserParams struct {
 	OrganizationID uuid.UUID
 	ClerkUserID    string
 }
 
-func (q *Queries) HasMembershipByOrganizationUser(ctx context.Context, arg HasMembershipByOrganizationUserParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasMembershipByOrganizationUser, arg.OrganizationID, arg.ClerkUserID)
+func (q *Queries) HasDeletedMembershipByOrganizationUser(ctx context.Context, arg HasDeletedMembershipByOrganizationUserParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasDeletedMembershipByOrganizationUser, arg.OrganizationID, arg.ClerkUserID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
