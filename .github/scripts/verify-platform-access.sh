@@ -26,6 +26,7 @@ network="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networ
 test -n "${postgres_user}"
 test -n "${postgres_db}"
 test -n "${network}"
+test -n "${PLATFORM_ACCESS_DATABASE_URL}"
 test -f "${auth_work}/private.pem"
 
 if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${identity_id}" | grep --quiet '^PLATFORM_ACCESS_DATABASE_URL='; then
@@ -125,9 +126,9 @@ PY
 
 run_operator() {
   local command="$1" output="$2"
-  PLATFORM_ACCESS_DATABASE_URL="${MIGRATION_DATABASE_URL}" \
-  PLATFORM_ACCESS_DATABASE_CONNECT_TIMEOUT=5s \
-  PLATFORM_ACCESS_COMMAND_TIMEOUT=5s \
+  PLATFORM_ACCESS_DATABASE_URL="${PLATFORM_ACCESS_DATABASE_URL}" \
+  PLATFORM_ACCESS_DATABASE_CONNECT_TIMEOUT="${PLATFORM_ACCESS_DATABASE_CONNECT_TIMEOUT}" \
+  PLATFORM_ACCESS_COMMAND_TIMEOUT="${PLATFORM_ACCESS_COMMAND_TIMEOUT}" \
     docker compose run --rm --no-deps \
       -e PLATFORM_ACCESS_DATABASE_URL \
       -e PLATFORM_ACCESS_DATABASE_CONNECT_TIMEOUT \
@@ -170,6 +171,12 @@ test "${status}" = "200"
 grep --quiet '"organization.verification.review"' "${work}/after-regrant-body.json"
 run_operator status "${work}/operator-status.log"
 
+phase=final-revoke
+run_operator revoke "${work}/operator-final-revoke.log"
+status="$(private_request platform-after-final-revoke after-final-revoke false)"
+test "${status}" = "200"
+grep --quiet '"permissions":\[\]' "${work}/after-final-revoke-body.json"
+
 phase=apisix-non-exposure
 public_body="${work}/public-internal-body"
 public_status="$(curl --show-error --silent --output "${public_body}" --write-out '%{http_code}' \
@@ -180,7 +187,7 @@ test "${public_status}" = "404"
 
 phase=sensitive-log-scan
 docker compose logs --no-color identity-service > "${work}/identity-service.log"
-python3 - "${work}" "${auth_work}/platform-access.token" "${DATABASE_URL}" "${MIGRATION_DATABASE_URL}" "${IDENTITY_POSTGRES_PASSWORD}" <<'PY'
+python3 - "${work}" "${auth_work}/platform-access.token" "${DATABASE_URL}" "${MIGRATION_DATABASE_URL}" "${PLATFORM_ACCESS_DATABASE_URL}" "${IDENTITY_POSTGRES_PASSWORD}" <<'PY'
 import pathlib, sys
 work=pathlib.Path(sys.argv[1])
 token=pathlib.Path(sys.argv[2]).read_text(encoding='utf-8').strip()
@@ -189,13 +196,21 @@ forbidden=[
     sys.argv[3],
     sys.argv[4],
     sys.argv[5],
+    sys.argv[6],
     'platform-ci@example.test',
     'Authorization: Bearer',
     'CLERK_WEBHOOK_SIGNING_SECRET',
     'postgres://',
 ]
 texts=[]
-for name in ['identity-service.log','operator-grant.log','operator-revoke.log','operator-regrant.log','operator-status.log']:
+for name in [
+    'identity-service.log',
+    'operator-grant.log',
+    'operator-revoke.log',
+    'operator-regrant.log',
+    'operator-status.log',
+    'operator-final-revoke.log',
+]:
     texts.append((work / name).read_text(encoding='utf-8'))
 combined='\n'.join(texts)
 for value in forbidden:
