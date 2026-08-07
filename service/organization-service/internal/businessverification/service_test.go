@@ -153,3 +153,21 @@ func TestVerifyBusinessEmailAllowsCurrentAdmin(t *testing.T) {
 		t.Fatalf("Verify() error = %v", err)
 	}
 }
+
+func TestVerifyBusinessEmailRejectsRemovalPendingMembership(t *testing.T) {
+	uow := &fakeBusinessUOW{found: true, membership: Membership{
+		ID: businessTestMembershipID, OrganizationID: businessTestOrganizationID,
+		ApplicationRole: "owner", Status: "active", RemovalPending: true,
+	}}
+	service, err := New(fakeBusinessFactory{uow: uow}, []string{"gmail.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	email := "owner@company.example"
+	if _, err := service.Verify(context.Background(), businessActor(), &email); !errors.Is(err, ErrMembershipNotActive) {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if uow.persisted || uow.commits != 0 || uow.rollbacks != 1 {
+		t.Fatalf("removal-pending mutation = persisted:%v commit:%d rollback:%d", uow.persisted, uow.commits, uow.rollbacks)
+	}
+}
