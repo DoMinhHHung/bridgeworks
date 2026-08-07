@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -172,8 +173,11 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, de
 	if err := decoder.Decode(destination); err != nil {
 		return err
 	}
-	if decoder.Decode(&struct{}{}) != nil {
-		return nil
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
 	}
-	return errors.New("multiple JSON values are not allowed")
+	return nil
 }
