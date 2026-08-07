@@ -36,13 +36,13 @@ var (
 	ErrProviderStateConflict    = errors.New("membership provider state conflict")
 )
 
-// Provider errors are deliberately coarse so Clerk response bodies, trace IDs,
+// Adapter errors are deliberately coarse so Clerk response bodies, trace IDs,
 // and provider-specific identifiers never cross the adapter boundary.
 var (
-	ProviderErrConflict    = errors.New("provider conflict")
-	ProviderErrRejected    = errors.New("provider rejected request")
-	ProviderErrUnavailable = errors.New("provider unavailable")
-	ProviderErrNotFound    = errors.New("provider membership not found")
+	ErrUpstreamConflict    = errors.New("provider conflict")
+	ErrUpstreamRejected    = errors.New("provider rejected request")
+	ErrUpstreamUnavailable = errors.New("provider unavailable")
+	ErrUpstreamNotFound    = errors.New("provider membership not found")
 )
 
 type Organization struct {
@@ -156,14 +156,14 @@ func (s *Service) Invite(
 	}
 
 	switch {
-	case errors.Is(providerErr, ProviderErrUnavailable):
+	case errors.Is(providerErr, ErrUpstreamUnavailable):
 		// The provider may have accepted the request before the timeout. Preserve
 		// the intent so a later verified membership webhook can still reconcile it.
 		return InvitationResult{}, ErrProviderUnavailable
-	case errors.Is(providerErr, ProviderErrConflict):
+	case errors.Is(providerErr, ErrUpstreamConflict):
 		_ = s.deleteInvitationIntent(ctx, actor.OrganizationID, intentID)
 		return InvitationResult{}, ErrInvitationConflict
-	case errors.Is(providerErr, ProviderErrRejected), errors.Is(providerErr, ProviderErrNotFound):
+	case errors.Is(providerErr, ErrUpstreamRejected), errors.Is(providerErr, ErrUpstreamNotFound):
 		_ = s.deleteInvitationIntent(ctx, actor.OrganizationID, intentID)
 		return InvitationResult{}, ErrInvitationRejected
 	default:
@@ -453,16 +453,16 @@ func (s *Service) requestRemoval(
 		ClerkUserID:         target.ClerkUserID,
 	})
 	switch {
-	case providerErr == nil, errors.Is(providerErr, ProviderErrNotFound):
+	case providerErr == nil, errors.Is(providerErr, ErrUpstreamNotFound):
 		// Local status remains active only in the provider projection table. The
 		// removal reservation excludes authorization until the signed delete
 		// webhook reconciles and clears the reservation.
 		return nil
-	case errors.Is(providerErr, ProviderErrUnavailable):
+	case errors.Is(providerErr, ErrUpstreamUnavailable):
 		// Keep the reservation. A later identical command retries the provider
 		// delete instead of silently treating the pending state as completed.
 		return ErrProviderUnavailable
-	case errors.Is(providerErr, ProviderErrConflict), errors.Is(providerErr, ProviderErrRejected):
+	case errors.Is(providerErr, ErrUpstreamConflict), errors.Is(providerErr, ErrUpstreamRejected):
 		if cleanupErr := s.deleteRemovalIntent(ctx, actor.OrganizationID, target.ID); cleanupErr != nil {
 			return cleanupErr
 		}
@@ -571,7 +571,7 @@ func normalizeInvitationEmail(raw string) (string, error) {
 			return "", ErrInvalidEmail
 		}
 		for _, r := range label {
-			if r > unicode.MaxASCII || !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			if r > unicode.MaxASCII || (r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9')) {
 				return "", ErrInvalidEmail
 			}
 		}
