@@ -62,6 +62,11 @@ func TestLoadRejectsClerkBackendConfiguration(t *testing.T) {
 		t.Fatal("expected Clerk Backend API timeout rejection")
 	}
 	env = validEnvironment()
+	env["CLERK_BACKEND_API_URL"] = "https://api.clerk.com/v1"
+	if _, err := load(lookup(env)); err == nil {
+		t.Fatal("expected versioned Clerk Backend API path rejection")
+	}
+	env = validEnvironment()
 	env["ORGANIZATION_PERSONAL_EMAIL_DOMAINS"] = "gmail.com,"
 	if _, err := load(lookup(env)); err == nil {
 		t.Fatal("expected empty personal email domain rejection")
