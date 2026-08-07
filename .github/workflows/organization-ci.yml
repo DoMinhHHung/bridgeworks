@@ -58,12 +58,13 @@ jobs:
           set -euo pipefail
           git diff --exit-code origin/main...HEAD -- \
             service/identity-service/migrations/000001_create_app_users.sql \
+            service/identity-service/migrations/000002_add_platform_access.sql \
             service/organization-service/migrations/000001_create_organization_foundation.sql \
             service/organization-service/migrations/000002_complete_organization_domain.sql \
             service/organization-service/migrations/000003_add_owner_bootstrap_state.sql \
             service/organization-service/migrations/000004_add_membership_administration.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "2"
-          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "4"
+          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "5"
 
       - name: Verify Organization application boundary
         shell: bash
@@ -109,6 +110,9 @@ jobs:
             service/organization-service/internal/membershipadmin
           grep --quiet 'ResolvePlatformAccess' service/organization-service/internal/identityclient/platform_access.go
           grep --quiet 'PermissionOrganizationVerificationReview' service/organization-service/internal/platformauthorization/service.go
+          grep --quiet 'organization.audit.read' service/organization-service/migrations/000005_add_organization_audit.sql
+          ! grep -R --line-number --fixed-strings '/internal/v1/platform-access/me' gateway/apisix/conf/apisix.yaml gateway/apisix/conf/apisix.cloud-run.yaml
+          ! grep -R --line-number --fixed-strings 'ORGANIZATION_MAINTENANCE_DATABASE_URL' compose.yaml
 
       - name: Validate Organization Go module
         shell: bash
@@ -188,20 +192,21 @@ jobs:
             exit 1
           fi
           printf '%s\n' "${first}"
-          grep --quiet '"count":4' <<< "${first}"
+          grep --quiet '"count":5' <<< "${first}"
           second="$(docker compose run --rm organization-migrate up)"
           printf '%s\n' "${second}"
           grep --quiet '"count":0' <<< "${second}"
           version="$(docker compose run --rm organization-migrate version)"
           printf '%s\n' "${version}"
-          grep --quiet '"version":4' <<< "${version}"
+          grep --quiet '"version":5' <<< "${version}"
           status="$(docker compose run --rm organization-migrate status)"
           printf '%s\n' "${status}"
           grep --quiet '000001_create_organization_foundation.sql' <<< "${status}"
           grep --quiet '000002_complete_organization_domain.sql' <<< "${status}"
           grep --quiet '000003_add_owner_bootstrap_state.sql' <<< "${status}"
           grep --quiet '000004_add_membership_administration.sql' <<< "${status}"
-          test "$(grep -c '"state":"applied"' <<< "${status}")" -ge 4
+          grep --quiet '000005_add_organization_audit.sql' <<< "${status}"
+          test "$(grep -c '"state":"applied"' <<< "${status}")" -ge 5
           postgres_id="$(docker compose ps -q organization-postgres)"
           postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
           postgres_db="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_DB=//p')"
@@ -217,9 +222,10 @@ jobs:
               select to_regclass('organization.clerk_webhook_events') is not null;
               select to_regclass('organization.membership_invitation_intents') is not null;
               select to_regclass('organization.membership_removal_intents') is not null;
+              select to_regclass('organization.audit_events') is not null;
               select count(*) = 5 from organization.roles;
-              select count(*) = 7 from organization.permissions;
-              select count(*) = 17 from organization.role_permissions;
+              select count(*) = 8 from organization.permissions;
+              select count(*) = 19 from organization.role_permissions;
               select exists (
                 select 1 from information_schema.columns
                 where table_schema='organization' and table_name='organizations'
@@ -250,9 +256,9 @@ jobs:
                 where table_schema='organization' and table_name='organizations'
                   and column_name='business_email_verified_by_user_id'
               );
-            " | grep --count ' t' | grep --quiet '^15$'
+            " | grep --count ' t' | grep --quiet '^16$'
 
-      - name: Verify v1 through v4 Organization migrations
+      - name: Verify v1 through v5 Organization migrations and concurrency
         shell: bash
         run: |
           set -euo pipefail
@@ -282,7 +288,7 @@ jobs:
             --workdir /src/service/organization-service \
             --env "ORGANIZATION_MIGRATION_TEST_DATABASE_URL=${migration_test_url}" \
             golang:1.26.5-bookworm \
-            go test -race -run '^(TestDomainMigrationUpgradesExistingRowsSafely|TestOnboardingMigrationPreservesExistingAuthorization|TestMembershipAdministrationMigrationPreservesAuthorizationAndAddsPrivateState)$' ./migrations
+            go test -race -run '^(TestDomainMigrationUpgradesExistingRowsSafely|TestOnboardingMigrationPreservesExistingAuthorization|TestMembershipAdministrationMigrationPreservesAuthorizationAndAddsPrivateState|TestOrganizationAuditMigrationPreservesV4StateAndAddsBoundedAuditAuthority|TestPlatformReviewConcurrencyAndAuditAtomicity)$' ./migrations
           unset migration_test_url
           docker compose exec -T organization-postgres psql \
             --username "${postgres_user}" \
@@ -323,6 +329,10 @@ jobs:
       - name: Verify Organization onboarding ownership and webhook reconciliation
         shell: bash
         run: bash .github/scripts/verify-organization-onboarding.sh
+
+      - name: Verify Organization production completion
+        shell: bash
+        run: bash .github/scripts/verify-organization-production-completion.sh
 
       - name: Verify membership conflict and concurrency regressions
         shell: bash
