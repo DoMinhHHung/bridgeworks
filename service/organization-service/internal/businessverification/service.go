@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authorization"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationaudit"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform/safeerr"
 	"github.com/google/uuid"
 )
@@ -32,6 +33,7 @@ type UnitOfWork interface {
 	AcquireOrganizationLock(context.Context, uuid.UUID) error
 	LockMembership(context.Context, uuid.UUID, uuid.UUID) (Membership, bool, error)
 	UpdateBusinessEmailVerification(context.Context, uuid.UUID, string, time.Time, uuid.UUID) error
+	InsertAuditEvent(context.Context, organizationaudit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
 }
@@ -116,6 +118,21 @@ func (s *Service) Verify(
 		actor.IdentityUserID,
 	); err != nil {
 		return Result{}, safeerr.Wrap("persist business email verification", err)
+	}
+	event, err := organizationaudit.TenantEvent(
+		actor.OrganizationID,
+		organizationaudit.EventOrganizationBusinessEmailVerified,
+		actor.IdentityUserID,
+		actor.MembershipID,
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return Result{}, safeerr.Wrap("create business email audit event", err)
+	}
+	if err := uow.InsertAuditEvent(ctx, event); err != nil {
+		return Result{}, safeerr.Wrap("append business email audit event", err)
 	}
 	if err := uow.Commit(ctx); err != nil {
 		return Result{}, safeerr.Wrap("commit business email verification", err)
