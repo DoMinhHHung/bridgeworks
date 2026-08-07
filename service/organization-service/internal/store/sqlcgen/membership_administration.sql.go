@@ -184,8 +184,8 @@ WITH target AS (
     SET owner_bootstrap_eligible = false
     FROM target t
     WHERE o.id = $2
-      AND o.owner_bootstrapped = false
       AND o.owner_bootstrap_eligible = true
+      AND o.owner_bootstrapped = false
       AND o.clerk_created_by_user_id = t.clerk_user_id
 )
 INSERT INTO organization.membership_removal_intents (
