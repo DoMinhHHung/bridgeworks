@@ -129,6 +129,9 @@ func TestRequestVerificationMapsTransitionConflict(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), "\"code\":\"verification_transition_not_allowed\"") {
 		t.Fatalf("body = %s", recorder.Body.String())
 	}
+	if recorder.Header().Get("Retry-After") != "" {
+		t.Fatalf("Retry-After = %q for lifecycle conflict", recorder.Header().Get("Retry-After"))
+	}
 }
 
 func TestPatchCurrentOrganizationPreservesNotReadyContract(t *testing.T) {
@@ -141,6 +144,27 @@ func TestPatchCurrentOrganizationPreservesNotReadyContract(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
 	PatchCurrentOrganization(resolver, stub).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Retry-After") != "2" {
+		t.Fatalf("Retry-After = %q", recorder.Header().Get("Retry-After"))
+	}
+	if !strings.Contains(recorder.Body.String(), "\"code\":\"organization_not_ready\"") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestRequestVerificationPreservesNotReadyRetryHeader(t *testing.T) {
+	resolver := onboardingResolverStub{err: currentorganization.ErrOrganizationNotReady}
+	stub := &onboardingStub{}
+	request := httptest.NewRequest(http.MethodPost, "/organizations/current/verification", strings.NewReader("{}"))
+	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
+		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
+	}))
+	recorder := httptest.NewRecorder()
+
+	RequestCurrentOrganizationVerification(resolver, stub).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
