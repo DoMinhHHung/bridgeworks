@@ -40,16 +40,16 @@ func (r *Repository) ListPendingVerificationQueue(
 	items := make([]platformreview.QueueItem, 0, len(rows))
 	for _, row := range rows {
 		item := platformreview.QueueItem{
-			ID:                 row.ID,
-			Name:               row.Name,
-			LegalName:          row.LegalName,
-			Website:            row.Website,
-			Country:            row.Country,
-			CompanyType:        row.CompanyType,
-			VerificationStatus: row.VerificationStatus,
+			ID:                  row.ID,
+			Name:                row.Name,
+			LegalName:           row.LegalName,
+			Website:             row.Website,
+			Country:             row.Country,
+			CompanyType:         row.CompanyType,
+			VerificationStatus:  row.VerificationStatus,
 			BusinessEmailDomain: row.BusinessEmailDomain,
-			UpdatedAt:          row.UpdatedAt.Time.UTC(),
-			RequestedAt:        row.RequestedAt.Time.UTC(),
+			UpdatedAt:           row.UpdatedAt.Time.UTC(),
+			RequestedAt:         row.RequestedAt.Time.UTC(),
 		}
 		if row.BusinessEmailVerifiedAt.Valid {
 			value := row.BusinessEmailVerifiedAt.Time.UTC()
