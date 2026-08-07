@@ -30,7 +30,7 @@ const (
 	maximumWebhookMaxBodyBytes           = int64(5 * 1024 * 1024)
 	defaultClerkAuthLeeway               = 5 * time.Second
 	maximumClerkAuthLeeway               = 30 * time.Second
-	defaultClerkBackendAPIURL            = "https://api.clerk.com/v1"
+	defaultClerkBackendAPIURL            = "https://api.clerk.com"
 	defaultClerkBackendAPITimeout        = 3 * time.Second
 	maximumClerkBackendAPITimeout        = 5 * time.Second
 	defaultIdentityServiceURL            = "http://identity-service:8080"
