@@ -1,0 +1,34 @@
+name: Organization Format Diagnostic
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gofmt-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Print gofmt diffs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd service/organization-service
+          unformatted="$(find . -name '*.go' -type f -print0 | xargs -0 -r gofmt -l)"
+          if [[ -z "${unformatted}" ]]; then
+            echo "All Go files are formatted."
+            exit 0
+          fi
+          printf 'Unformatted Go files:\n%s\n' "${unformatted}"
+          while IFS= read -r file; do
+            [[ -z "${file}" ]] && continue
+            gofmt -d "${file}"
+          done <<< "${unformatted}"
+          exit 1
