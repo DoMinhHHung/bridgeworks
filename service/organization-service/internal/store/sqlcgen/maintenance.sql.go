@@ -35,11 +35,11 @@ type ListRemovalIntentsForReconciliationParams struct {
 }
 
 type ListRemovalIntentsForReconciliationRow struct {
-	MembershipID       uuid.UUID
-	OrganizationID     uuid.UUID
-	CreatedAt          pgtype.Timestamptz
+	MembershipID        uuid.UUID
+	OrganizationID      uuid.UUID
+	CreatedAt           pgtype.Timestamptz
 	ClerkOrganizationID string
-	ClerkUserID        string
+	ClerkUserID         string
 }
 
 func (q *Queries) ListRemovalIntentsForReconciliation(ctx context.Context, arg ListRemovalIntentsForReconciliationParams) ([]ListRemovalIntentsForReconciliationRow, error) {
