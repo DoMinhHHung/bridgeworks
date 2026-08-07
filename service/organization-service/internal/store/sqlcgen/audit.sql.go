@@ -92,7 +92,12 @@ type ListOrganizationAuditEventsRow struct {
 }
 
 func (q *Queries) ListOrganizationAuditEvents(ctx context.Context, arg ListOrganizationAuditEventsParams) ([]ListOrganizationAuditEventsRow, error) {
-	rows, err := q.db.Query(ctx, listOrganizationAuditEvents, arg.OrganizationID, arg.BeforeTime, arg.BeforeID, arg.ResultLimit)
+	rows, err := q.db.Query(ctx, listOrganizationAuditEvents,
+		arg.OrganizationID,
+		arg.BeforeTime,
+		arg.BeforeID,
+		arg.ResultLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
