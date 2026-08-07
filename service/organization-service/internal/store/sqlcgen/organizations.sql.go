@@ -11,7 +11,16 @@ import (
 	"github.com/google/uuid"
 )
 
-func scanOrganization(row interface{ Scan(...any) error }) (OrganizationOrganization, error) {
+const getOrganizationByClerkID = `-- name: GetOrganizationByClerkID :one
+SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
+       legal_name, website, country, company_type, verification_status, trust_status,
+       clerk_created_by_user_id, owner_bootstrapped
+FROM organization.organizations
+WHERE clerk_organization_id = $1
+`
+
+func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, getOrganizationByClerkID, clerkOrganizationID)
 	var i OrganizationOrganization
 	err := row.Scan(
 		&i.ID,
@@ -33,31 +42,6 @@ func scanOrganization(row interface{ Scan(...any) error }) (OrganizationOrganiza
 	return i, err
 }
 
-const getOrganizationByClerkID = `-- name: GetOrganizationByClerkID :one
-SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
-       legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped
-FROM organization.organizations
-WHERE clerk_organization_id = $1
-`
-
-func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, getOrganizationByClerkID, clerkOrganizationID))
-}
-
-const lockOrganizationByID = `-- name: LockOrganizationByID :one
-SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
-       legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped
-FROM organization.organizations
-WHERE id = $1
-FOR UPDATE
-`
-
-func (q *Queries) LockOrganizationByID(ctx context.Context, id uuid.UUID) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, lockOrganizationByID, id))
-}
-
 const insertOrganization = `-- name: InsertOrganization :one
 INSERT INTO organization.organizations (
     id, clerk_organization_id, name, slug, status, clerk_created_by_user_id
@@ -77,41 +61,112 @@ type InsertOrganizationParams struct {
 }
 
 func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganizationParams) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, insertOrganization,
+	row := q.db.QueryRow(ctx, insertOrganization,
 		arg.ID,
 		arg.ClerkOrganizationID,
 		arg.Name,
 		arg.Slug,
 		arg.Status,
 		arg.ClerkCreatedByUserID,
-	))
+	)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
 }
 
-const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :one
+const lockOrganizationByID = `-- name: LockOrganizationByID :one
+SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
+       legal_name, website, country, company_type, verification_status, trust_status,
+       clerk_created_by_user_id, owner_bootstrapped
+FROM organization.organizations
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockOrganizationByID(ctx context.Context, id uuid.UUID) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, lockOrganizationByID, id)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
+}
+
+const markOrganizationDeleted = `-- name: MarkOrganizationDeleted :one
 UPDATE organization.organizations
-SET name = $2,
-    slug = $3,
-    status = $4
+SET name = NULL,
+    slug = NULL,
+    status = 'deleted'
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
           clerk_created_by_user_id, owner_bootstrapped
 `
 
-type UpdateOrganizationProjectionParams struct {
-	ClerkOrganizationID string
-	Name                *string
-	Slug                *string
-	Status              string
+func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, markOrganizationDeleted, clerkOrganizationID)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
 }
 
-func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, updateOrganizationProjection,
-		arg.ClerkOrganizationID,
-		arg.Name,
-		arg.Slug,
-		arg.Status,
-	))
+const markOrganizationOwnerBootstrapped = `-- name: MarkOrganizationOwnerBootstrapped :exec
+UPDATE organization.organizations
+SET owner_bootstrapped = true
+WHERE id = $1
+  AND owner_bootstrapped = false
+  AND clerk_created_by_user_id IS NOT NULL
+`
+
+func (q *Queries) MarkOrganizationOwnerBootstrapped(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markOrganizationOwnerBootstrapped, id)
+	return err
 }
 
 const setOrganizationCreator = `-- name: SetOrganizationCreator :one
@@ -130,20 +185,26 @@ type SetOrganizationCreatorParams struct {
 }
 
 func (q *Queries) SetOrganizationCreator(ctx context.Context, arg SetOrganizationCreatorParams) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, setOrganizationCreator, arg.ClerkOrganizationID, arg.ClerkCreatedByUserID))
-}
-
-const markOrganizationOwnerBootstrapped = `-- name: MarkOrganizationOwnerBootstrapped :exec
-UPDATE organization.organizations
-SET owner_bootstrapped = true
-WHERE id = $1
-  AND owner_bootstrapped = false
-  AND clerk_created_by_user_id IS NOT NULL
-`
-
-func (q *Queries) MarkOrganizationOwnerBootstrapped(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, markOrganizationOwnerBootstrapped, id)
-	return err
+	row := q.db.QueryRow(ctx, setOrganizationCreator, arg.ClerkOrganizationID, arg.ClerkCreatedByUserID)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
 }
 
 const updateOrganizationProductProfile = `-- name: UpdateOrganizationProductProfile :one
@@ -167,13 +228,78 @@ type UpdateOrganizationProductProfileParams struct {
 }
 
 func (q *Queries) UpdateOrganizationProductProfile(ctx context.Context, arg UpdateOrganizationProductProfileParams) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, updateOrganizationProductProfile,
+	row := q.db.QueryRow(ctx, updateOrganizationProductProfile,
 		arg.ID,
 		arg.LegalName,
 		arg.Website,
 		arg.Country,
 		arg.CompanyType,
-	))
+	)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
+}
+
+const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :one
+UPDATE organization.organizations
+SET name = $2,
+    slug = $3,
+    status = $4
+WHERE clerk_organization_id = $1
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status,
+          clerk_created_by_user_id, owner_bootstrapped
+`
+
+type UpdateOrganizationProjectionParams struct {
+	ClerkOrganizationID string
+	Name                *string
+	Slug                *string
+	Status              string
+}
+
+func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, updateOrganizationProjection,
+		arg.ClerkOrganizationID,
+		arg.Name,
+		arg.Slug,
+		arg.Status,
+	)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
 }
 
 const updateOrganizationVerificationStatus = `-- name: UpdateOrganizationVerificationStatus :one
@@ -191,20 +317,24 @@ type UpdateOrganizationVerificationStatusParams struct {
 }
 
 func (q *Queries) UpdateOrganizationVerificationStatus(ctx context.Context, arg UpdateOrganizationVerificationStatusParams) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, updateOrganizationVerificationStatus, arg.ID, arg.VerificationStatus))
-}
-
-const markOrganizationDeleted = `-- name: MarkOrganizationDeleted :one
-UPDATE organization.organizations
-SET name = NULL,
-    slug = NULL,
-    status = 'deleted'
-WHERE clerk_organization_id = $1
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
-          legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
-`
-
-func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
-	return scanOrganization(q.db.QueryRow(ctx, markOrganizationDeleted, clerkOrganizationID))
+	row := q.db.QueryRow(ctx, updateOrganizationVerificationStatus, arg.ID, arg.VerificationStatus)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+	)
+	return i, err
 }
