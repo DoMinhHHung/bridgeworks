@@ -86,10 +86,10 @@ func TestProviderErrorsAreSanitized(t *testing.T) {
 		createWant error
 		deleteWant error
 	}{
-		{name: "conflict", status: http.StatusConflict, createWant: membershipadmin.ProviderErrConflict, deleteWant: membershipadmin.ProviderErrConflict},
-		{name: "rate limit", status: http.StatusTooManyRequests, createWant: membershipadmin.ProviderErrUnavailable, deleteWant: membershipadmin.ProviderErrUnavailable},
-		{name: "not found", status: http.StatusNotFound, createWant: membershipadmin.ProviderErrRejected, deleteWant: membershipadmin.ProviderErrNotFound},
-		{name: "server", status: http.StatusBadGateway, createWant: membershipadmin.ProviderErrUnavailable, deleteWant: membershipadmin.ProviderErrUnavailable},
+		{name: "conflict", status: http.StatusConflict, createWant: membershipadmin.ErrUpstreamConflict, deleteWant: membershipadmin.ErrUpstreamConflict},
+		{name: "rate limit", status: http.StatusTooManyRequests, createWant: membershipadmin.ErrUpstreamUnavailable, deleteWant: membershipadmin.ErrUpstreamUnavailable},
+		{name: "not found", status: http.StatusNotFound, createWant: membershipadmin.ErrUpstreamRejected, deleteWant: membershipadmin.ErrUpstreamNotFound},
+		{name: "server", status: http.StatusBadGateway, createWant: membershipadmin.ErrUpstreamUnavailable, deleteWant: membershipadmin.ErrUpstreamUnavailable},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -132,7 +132,7 @@ func TestProviderTimeoutIsUnavailable(t *testing.T) {
 	err = client.DeleteMembership(context.Background(), membershipadmin.MembershipDeleteProviderRequest{
 		ClerkOrganizationID: "org_test", ClerkUserID: "user_target",
 	})
-	if !errors.Is(err, membershipadmin.ProviderErrUnavailable) {
+	if !errors.Is(err, membershipadmin.ErrUpstreamUnavailable) {
 		t.Fatalf("DeleteMembership() error = %v", err)
 	}
 }
