@@ -13,6 +13,8 @@ on:
       - gateway/apisix/scripts/cloud-run-entrypoint.sh
       - gateway/apisix/scripts/validate-cloud-run-image.sh
       - gateway/apisix/README.cloud-run.md
+      - service/identity-service/internal/httpapi/platform_access.go
+      - .github/scripts/verify-platform-access.sh
       - .github/workflows/apisix-cloud-run-ci.yml
       - Makefile
   pull_request:
@@ -25,6 +27,8 @@ on:
       - gateway/apisix/scripts/cloud-run-entrypoint.sh
       - gateway/apisix/scripts/validate-cloud-run-image.sh
       - gateway/apisix/README.cloud-run.md
+      - service/identity-service/internal/httpapi/platform_access.go
+      - .github/scripts/verify-platform-access.sh
       - .github/workflows/apisix-cloud-run-ci.yml
       - Makefile
   workflow_dispatch:
@@ -47,6 +51,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Verify private Identity platform route is not published
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number --fixed-strings '/internal/v1/platform-access/me' \
+            gateway/apisix/conf/apisix.yaml \
+            gateway/apisix/conf/apisix.cloud-run.yaml
 
       - name: Validate APISIX Cloud Run image
         shell: bash

@@ -20,6 +20,7 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/identityid"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/observability"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform"
+	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platformaccess"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/postgres"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/rediscache"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/store"
@@ -161,6 +162,7 @@ func run(bootstrapLogger *slog.Logger) error {
 		return err
 	}
 	currentUserService := currentuser.New(cachedCurrentUserReader)
+	platformAccessService := platformaccess.New(identityRepository)
 
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -171,6 +173,7 @@ func run(bootstrapLogger *slog.Logger) error {
 				ClerkWebhookProcessTimeout: cfg.ClerkWebhookProcessTimeout,
 				ClerkWebhookMaxBodyBytes:   cfg.ClerkWebhookMaxBodyBytes,
 				Metrics:                    metrics,
+				PlatformAccess:             platformAccessService,
 			},
 			logger,
 			database,

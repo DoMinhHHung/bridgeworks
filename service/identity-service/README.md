@@ -1,28 +1,35 @@
 # identity-service
 
 Identity boundary của BridgeWorks. Service đồng bộ Clerk user events vào local
-PostgreSQL projection qua public signed webhook và xác thực Clerk session token
-cho authenticated `GET /api/v1/me`.
+PostgreSQL projection qua public signed webhook, xác thực Clerk session token cho
+authenticated `GET /api/v1/me`, và sở hữu local BridgeWorks global platform
+access gắn với Identity user.
 
 ## Ownership
 
 Clerk sở hữu authentication, sessions, password/social login, magic links và
-email verification. Identity Service chỉ sở hữu:
+email verification. Identity Service sở hữu:
 
 - immutable Clerk user mapping;
 - local BridgeWorks lifecycle `active|disabled|deleted`;
 - public `id_user`;
 - minimal verified primary-email projection;
 - transactional Clerk webhook inbox;
-- authorization decision dựa trên local account status.
+- authorization decision dựa trên local account status;
+- GLOBAL BridgeWorks platform access assignment cho local Identity user.
+
+Organization Service vẫn sở hữu tenant-local organization roles và permissions.
+`owner|admin|recruiter|delivery_manager|viewer` không phải platform roles và
+không thể suy ra `platform_admin`.
 
 `status=disabled` là BridgeWorks-owned và Clerk updates không được re-enable.
 `status=deleted` là tombstone; service không hard delete. `primary_email` chỉ là
 projection của Clerk primary address khi address đó có verification status
 `verified`. Service khác không được đọc schema `app` trực tiếp.
 
-`migrations/000001_create_app_users.sql` là locked schema contract. Session auth
-và `/me` không sửa migration hoặc thêm migration mới.
+Merged `migrations/000001_create_app_users.sql` là locked Identity foundation.
+PR3.5 thêm forward-only `migrations/000002_add_platform_access.sql`; migration
+v2 không sửa v1, không seed admin và không tự promote existing user.
 
 ## Authentication trust boundary
 
@@ -53,8 +60,13 @@ Chỉ verified claims mới được dùng. Boundary đọc `iss`, `sub`, `sid`,
 `exp`, và `nbf`; application layer chỉ nhận narrow principal. Raw token, full
 claims, Clerk error, subject đầy đủ và session ID đầy đủ không được log.
 
+JWT custom metadata, arbitrary role-like claims, Clerk organization role,
+organization permissions và active organization context không phải platform
+access authority. Local `app.platform_access_assignments` mới là source of truth.
+
 Service không dùng `CLERK_SECRET_KEY`, không gọi Clerk Backend API, không fetch
-Clerk user trong request path và không tự tạo local user từ `/me`.
+Clerk user trong request path và không tự tạo local user từ `/me` hoặc private
+platform-access lookup.
 
 Mọi authentication failure đều trả cùng contract:
 
@@ -146,6 +158,124 @@ Allowed preflight nhận `Access-Control-Allow-Origin` bằng đúng requested a
 origin. Origin ngoài allowlist không nhận header đó. Actual authenticated GET từ
 allowed origin expose `X-Request-Id` và `Retry-After` cho browser code.
 
+## Global platform authorization
+
+Global platform access là BridgeWorks-owned state gắn với local Identity UUID,
+không gắn với Organization membership. PR3.5 support đúng một role và một
+permission mapping code-owned:
+
+```text
+platform_admin
+    -> organization.verification.review
+```
+
+Tenant authority và platform authority là hai security domains độc lập:
+
+```text
+Clerk authenticated user
+        ↓
+Identity local active user
+        ↓
+Identity local platform access
+        ↓
+organization.verification.review
+```
+
+Không có bước current Organization, Organization membership, tenant `owner` hoặc
+tenant `admin`. Email, email domain, allowlist, hardcoded user ID, environment
+user list, hidden header, client role, frontend state, Clerk org role/permission,
+JWT custom role claim và Clerk public/private metadata đều không cấp
+`platform_admin`.
+
+### Private current-user platform-access contract
+
+Identity application listener có private route:
+
+```http
+GET /internal/v1/platform-access/me
+Authorization: Bearer <Clerk session token>
+```
+
+Active user có assignment trả:
+
+```json
+{
+  "roles": ["platform_admin"],
+  "permissions": ["organization.verification.review"]
+}
+```
+
+Ordinary active user trả:
+
+```json
+{
+  "roles": [],
+  "permissions": []
+}
+```
+
+Response không chứa email, Clerk IDs, provider metadata hoặc profile fields và
+luôn `Cache-Control: no-store`, `Vary: Authorization`. Request ID được preserve.
+Disabled/deleted local accounts bị deny trước role lookup. Missing projection trả
+`identity_not_ready`; database/contract failure trả sanitized
+`service_unavailable`.
+
+Route này **không được expose qua APISIX** và cố ý không nằm trong public
+`api/openapi.yaml`. Organization Service gọi private Identity service trực tiếp;
+Cloud Run giữ private ingress/platform identity boundary hiện hữu.
+
+Platform-access lookup không dùng Redis cache. Mỗi request đọc active local
+assignment tại request time, vì vậy revoke không cần refresh Clerk session:
+
+```text
+same Clerk session
+grant local platform_admin -> permission present
+revoke local platform_admin -> next lookup returns no permission
+```
+
+Unknown/duplicate platform role hoặc malformed projection fail closed; không có
+fallback sang tenant admin.
+
+## Platform-admin provisioning
+
+Không có public HTTP endpoint grant/revoke platform access. Provisioning dùng
+operator-only command binary trong Identity image:
+
+```text
+identity-platform-access grant  --id-user <bridgeworks-id-user>
+identity-platform-access revoke --id-user <bridgeworks-id-user>
+identity-platform-access status --id-user <bridgeworks-id-user>
+```
+
+Command chỉ target public BridgeWorks `id_user`; không hỗ trợ email hoặc Clerk
+user ID. `grant` và `revoke` idempotent. Grant yêu cầu existing local user có
+`status=active`; revoke vẫn được phép cho inactive user để operator luôn có thể
+thu hồi quyền. Binary không mở network listener, dùng structured `slog`, bounded
+DB connect/command timeout và exit non-zero khi operation thực sự fail.
+
+Production execution sẽ đi qua controlled operator infrastructure/Cloud Run Job
+hoặc equivalent secure execution context. PR3.5 chỉ cung cấp binary và source
+contract; không deploy operator job và không commit production credentials.
+
+## Database privilege boundary
+
+Ba database authority classes phải được tách khi hosted credentials được
+provision:
+
+- `DATABASE_URL`: normal Identity runtime. Runtime cần Identity core privileges
+  cho existing user/webhook flows và **chỉ SELECT** platform-access assignments.
+  Runtime HTTP credential không được INSERT/UPDATE platform roles.
+- `PLATFORM_ACCESS_DATABASE_URL`: operator-only credential. Nó cần lookup target
+  `app.app_users` và SELECT/INSERT/UPDATE `app.platform_access_assignments` để
+  grant/revoke/status; credential này không được inject vào `identity-service`.
+- `MIGRATION_DATABASE_URL`: migration/owner authority cho DDL.
+
+Local/CI có thể reuse local database owner vì đó là disposable private test
+infrastructure. Hosted Supabase/staging/production phải provision credential
+boundary ở trên trước operator execution. Việc tạo Cloud Run Job, Secret Manager
+binding hoặc production DB role credentials là deployment work và bị defer khỏi
+PR3.5; không có credential value production trong repo.
+
 ## Clerk webhook setup
 
 Trong Clerk Dashboard:
@@ -213,6 +343,8 @@ Exact `app_users_id_user_uq` collision được retry tối đa 5 lần; error k
 
 ## Configuration
 
+Runtime Identity variables:
+
 | Variable | Default |
 | --- | --- |
 | `DATABASE_URL` | required |
@@ -230,6 +362,17 @@ Exact `app_users_id_user_uq` collision được retry tối đa 5 lần; error k
 | `CLERK_ISSUER` | required |
 | `CLERK_AUTHORIZED_PARTIES` | required |
 | `CLERK_AUTH_LEEWAY` | `5s` |
+
+Operator CLI-only variables:
+
+| Variable | Default |
+| --- | --- |
+| `PLATFORM_ACCESS_DATABASE_URL` | required for operator command only |
+| `PLATFORM_ACCESS_DATABASE_CONNECT_TIMEOUT` | `5s` |
+| `PLATFORM_ACCESS_COMMAND_TIMEOUT` | `5s`, maximum `30s` |
+
+`PLATFORM_ACCESS_DATABASE_URL` must not be present in the normal
+`identity-service` runtime environment.
 
 `CLERK_JWT_KEY` chứa public JWT verification key từ Clerk và được trim outer
 whitespace. Không log hoặc echo key trong config errors. Dummy key trong
@@ -253,25 +396,19 @@ giây, vì vậy webhook processing phải hoàn tất trước gateway timeout.
 Webhook max body phải lớn hơn 0 và không quá 5 MiB. Signing secret không được
 blank. Config errors không echo secret, JWT key hoặc database URL.
 
-Runtime và migration database credentials vẫn tách biệt:
-
-- `DATABASE_URL`: least-privileged persistent runtime role.
-- `MIGRATION_DATABASE_URL`: migration/owner role.
-- Local có thể dùng cùng role.
-- Hosted Supabase/staging/production phải tách credentials khi provisioning hoàn
-  tất.
-- Persistent backend ưu tiên Supabase direct connection; IPv4-only deployment
-  dùng Supavisor session mode. Không dùng transaction pooler. Migration ưu tiên
-  direct connection.
+Persistent backend ưu tiên Supabase direct connection; IPv4-only deployment
+dùng Supavisor session mode. Không dùng transaction pooler. Migration ưu tiên
+direct connection.
 
 ## SQL generation
 
 sqlc config version 2 dùng PostgreSQL + `pgx/v5`. Generated code được commit dưới
 `internal/store/sqlcgen` và không sửa thủ công.
 
-`GetAppUserByClerkUserID` chỉ select fields cần cho current-user projection.
-Repository chuyển generated row sang narrow application model và phân biệt
-`pgx.ErrNoRows` với operational database failure.
+Current-user queries giữ narrow public projection. Platform-access queries tách
+runtime read (`GetPlatformAccessUserByClerkUserID`,
+`ListActivePlatformRolesByUserID`) khỏi operator grant/revoke/status operations.
+Repository phân biệt `pgx.ErrNoRows` với operational database failure.
 
 ```bash
 make identity-sqlc-generate
@@ -297,6 +434,8 @@ Identity port 8080 và PostgreSQL port 5432 không publish ra host.
 
 ## HTTP contracts
 
+Public APISIX contracts vẫn chỉ là:
+
 ```text
 GET     /api/v1/me
 OPTIONS /api/v1/me
@@ -304,6 +443,9 @@ GET     /api/v1/identity/health/live
 GET     /api/v1/identity/health/ready
 POST    /api/v1/identity/webhooks/clerk
 ```
+
+Private service-to-service contract `/internal/v1/platform-access/me` không có
+APISIX route và không phải public API.
 
 Webhook success, duplicate, stale và verified unsupported events đều trả `204`
 không body. Invalid signature/payload trả `400`, oversized body trả `413`, và
@@ -322,6 +464,7 @@ go mod tidy -diff
 go vet ./...
 go test -race -coverprofile=coverage.out ./...
 golangci-lint run ./...
+go tool cover -func=coverage.out
 cd ../..
 
 docker compose config --quiet
@@ -329,6 +472,14 @@ docker compose down --remove-orphans --volumes
 make stack-up
 make gateway-smoke
 ```
+
+CI chạy real PostgreSQL Identity v1→v2 migration regression, chứng minh existing
+users được preserve, không user nào auto-promote, schema constraints/PUBLIC
+revocation/internal FK boundary đúng, grant/revoke/re-grant idempotent và
+inactive account không được authorize. Full-stack integration dùng cùng một
+Clerk session để chứng minh grant có hiệu lực và revoke làm permission biến mất
+ở request kế tiếp mà không refresh session. Nó cũng assert forged platform
+header bị ignore và internal route trả 404 qua APISIX.
 
 CI generate ephemeral RSA keypairs ngoài Docker build context, inject chỉ public
 verification key vào service và sign Clerk-shaped session tokens cho tests. CI
@@ -340,8 +491,14 @@ allowed/disallowed preflight, actual allowed-origin GET, `Cache-Control`, `Vary`
 
 ## Production operations
 
-Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
+Trước khi production operator provisioning được bật, infrastructure phải tạo
+một credential riêng cho `PLATFORM_ACCESS_DATABASE_URL` với đúng DML privileges
+cần thiết trên platform-access assignment và không đưa credential đó vào normal
+Identity runtime. Operator execution cần controlled infrastructure (ví dụ Cloud
+Run Job) và secret-managed credential. PR3.5 không deploy job hoặc wire
+production secret.
 
+Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
 
 ---
 
