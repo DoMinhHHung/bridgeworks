@@ -52,7 +52,7 @@ WHERE organization_id = $1
   AND id = $2
   AND consumed_at IS NULL;
 
--- name: ConsumeMembershipInvitationIntent :exec
+-- name: ConsumeMembershipInvitationIntent :execrows
 UPDATE organization.membership_invitation_intents
 SET consumed_membership_id = $3,
     consumed_at = now()
