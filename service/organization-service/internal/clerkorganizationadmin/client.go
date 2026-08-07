@@ -28,20 +28,20 @@ type Client struct {
 func New(secretKey, rawURL string, timeout time.Duration) (*Client, error) {
 	secretKey = strings.TrimSpace(secretKey)
 	if secretKey == "" {
-		return nil, errors.New("Clerk secret key is required")
+		return nil, errors.New("clerk secret key is required")
 	}
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, errors.New("Clerk Backend API URL must be absolute")
+		return nil, errors.New("clerk Backend API URL must be absolute")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, errors.New("Clerk Backend API URL scheme must be HTTP or HTTPS")
+		return nil, errors.New("clerk Backend API URL scheme must be HTTP or HTTPS")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return nil, errors.New("Clerk Backend API URL must be an origin")
+		return nil, errors.New("clerk Backend API URL must be an origin")
 	}
 	if timeout <= 0 || timeout > 5*time.Second {
-		return nil, errors.New("Clerk Backend API timeout must be between zero and five seconds")
+		return nil, errors.New("clerk Backend API timeout must be between zero and five seconds")
 	}
 	parsed.Path = ""
 	baseURL := strings.TrimRight(parsed.String(), "/") + "/v1"
@@ -78,7 +78,7 @@ func (c *Client) CreateInvitation(
 		"bridgeworks_invitation_id": request.InvitationIntentID.String(),
 	})
 	if err != nil {
-		return membershipadmin.ProviderErrRejected
+		return membershipadmin.ErrUpstreamRejected
 	}
 	requestContext, cancel := context.WithTimeout(ctx, c.requestTimeout)
 	defer cancel()
@@ -117,24 +117,24 @@ func classifyCreateError(err error) error {
 		return nil
 	}
 	if isNetworkUnavailable(err) {
-		return membershipadmin.ProviderErrUnavailable
+		return membershipadmin.ErrUpstreamUnavailable
 	}
 	var apiErr *clerk.APIErrorResponse
 	if !errors.As(err, &apiErr) {
-		return membershipadmin.ProviderErrUnavailable
+		return membershipadmin.ErrUpstreamUnavailable
 	}
 	switch apiErr.HTTPStatusCode {
 	case http.StatusConflict:
-		return membershipadmin.ProviderErrConflict
+		return membershipadmin.ErrUpstreamConflict
 	case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
-		return membershipadmin.ProviderErrRejected
+		return membershipadmin.ErrUpstreamRejected
 	case http.StatusTooManyRequests:
-		return membershipadmin.ProviderErrUnavailable
+		return membershipadmin.ErrUpstreamUnavailable
 	default:
 		if apiErr.HTTPStatusCode >= 500 {
-			return membershipadmin.ProviderErrUnavailable
+			return membershipadmin.ErrUpstreamUnavailable
 		}
-		return membershipadmin.ProviderErrRejected
+		return membershipadmin.ErrUpstreamRejected
 	}
 }
 
@@ -143,24 +143,24 @@ func classifyDeleteError(err error) error {
 		return nil
 	}
 	if isNetworkUnavailable(err) {
-		return membershipadmin.ProviderErrUnavailable
+		return membershipadmin.ErrUpstreamUnavailable
 	}
 	var apiErr *clerk.APIErrorResponse
 	if !errors.As(err, &apiErr) {
-		return membershipadmin.ProviderErrUnavailable
+		return membershipadmin.ErrUpstreamUnavailable
 	}
 	switch apiErr.HTTPStatusCode {
 	case http.StatusNotFound:
-		return membershipadmin.ProviderErrNotFound
+		return membershipadmin.ErrUpstreamNotFound
 	case http.StatusConflict, http.StatusUnprocessableEntity:
-		return membershipadmin.ProviderErrConflict
+		return membershipadmin.ErrUpstreamConflict
 	case http.StatusTooManyRequests:
-		return membershipadmin.ProviderErrUnavailable
+		return membershipadmin.ErrUpstreamUnavailable
 	default:
 		if apiErr.HTTPStatusCode >= 500 {
-			return membershipadmin.ProviderErrUnavailable
+			return membershipadmin.ErrUpstreamUnavailable
 		}
-		return membershipadmin.ProviderErrRejected
+		return membershipadmin.ErrUpstreamRejected
 	}
 }
 
