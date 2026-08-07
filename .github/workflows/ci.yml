@@ -104,7 +104,7 @@ jobs:
 
           version_output="$(docker compose run --rm identity-migrate version)"
           printf '%s\n' "${version_output}"
-          grep --quiet '"version":1' <<< "${version_output}"
+          grep --quiet '"version":2' <<< "${version_output}"
 
           docker compose run --rm identity-migrate status
 
@@ -125,12 +125,55 @@ jobs:
               select to_regclass('app.goose_db_version') is not null;
               select to_regclass('app.app_users') is not null;
               select to_regclass('app.clerk_webhook_events') is not null;
+              select to_regclass('app.platform_access_assignments') is not null;
               select exists (
                 select 1
                 from pg_extension
                 where extname = 'citext'
               );
-            " | grep --count ' t' | grep --quiet '^4$'
+            " | grep --count ' t' | grep --quiet '^5$'
+
+      - name: Verify Identity v1 to v2 platform access migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .env
+          set +a
+
+          postgres_id="$(docker compose ps -q identity-postgres)"
+          postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
+          network="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${postgres_id}" | head -n 1)"
+          test -n "${postgres_user}"
+          test -n "${network}"
+
+          test_database='bridgeworks_identity_platform_access_migration_test'
+          docker compose exec -T identity-postgres psql \
+            --username "${postgres_user}" \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command "drop database if exists ${test_database} with (force)"
+          docker compose exec -T identity-postgres psql \
+            --username "${postgres_user}" \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command "create database ${test_database}"
+
+          migration_test_url="postgres://${IDENTITY_POSTGRES_USER}:${IDENTITY_POSTGRES_PASSWORD}@identity-postgres:5432/${test_database}?sslmode=disable"
+          docker run --rm \
+            --network "${network}" \
+            --volume "${PWD}:/src" \
+            --workdir /src/service/identity-service \
+            --env "IDENTITY_PLATFORM_ACCESS_MIGRATION_TEST_DATABASE_URL=${migration_test_url}" \
+            golang:1.26.5-bookworm \
+            go test -race -run '^TestPlatformAccessMigrationPreservesUsersAndAddsRevocableAuthority$' ./migrations
+          unset migration_test_url
+
+          docker compose exec -T identity-postgres psql \
+            --username "${postgres_user}" \
+            --dbname postgres \
+            --set ON_ERROR_STOP=1 \
+            --command "drop database if exists ${test_database} with (force)"
 
       - name: Build and start full stack
         run: make stack-up
@@ -585,6 +628,10 @@ jobs:
                   assert value not in body, f"{path.name} leaked forbidden value: {value[:32]!r}"
           PY
 
+      - name: Verify global platform access authorization
+        shell: bash
+        run: bash .github/scripts/verify-platform-access.sh
+
       - name: Verify current user browser CORS and cache headers
         shell: bash
         run: bash .github/scripts/verify-current-user-browser.sh
@@ -679,6 +726,7 @@ jobs:
               go vet ./...
               go test -race -coverprofile=coverage.out ./...
               golangci-lint run ./...
+              go tool cover -func=coverage.out
             )
             echo "::endgroup::"
           done
