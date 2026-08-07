@@ -52,13 +52,16 @@ jobs:
           make identity-sqlc-check
           make organization-sqlc-check
 
-      - name: Verify locked Identity migration
+      - name: Verify locked Identity and Organization baseline migrations
         shell: bash
         run: |
           set -euo pipefail
           git diff --exit-code origin/main...HEAD -- \
-            service/identity-service/migrations/000001_create_app_users.sql
+            service/identity-service/migrations/000001_create_app_users.sql \
+            service/organization-service/migrations/000001_create_organization_foundation.sql \
+            service/organization-service/migrations/000002_complete_organization_domain.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
+          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "3"
 
       - name: Verify Organization application boundary
         shell: bash
@@ -73,9 +76,23 @@ jobs:
           grep --quiet "memberships_active_organization_user_uq" service/organization-service/internal/organizationsync/unit_of_work.go
           grep --quiet "validateMembershipOwnership" service/organization-service/internal/organizationsync/service.go
           grep --quiet "inconsistent Clerk membership projection" service/organization-service/internal/organizationsync/service.go
-          grep --quiet "SET name = \$2" service/organization-service/internal/store/queries/organizations.sql
-          ! grep -E "SET .*legal_name|SET .*website|SET .*country|SET .*company_type|SET .*verification_status|SET .*trust_status" \
-            service/organization-service/internal/store/queries/organizations.sql
+          grep --quiet "CreatedBy" service/organization-service/internal/organizationsync/event.go
+          grep --quiet "bootstrapInitialOwner" service/organization-service/internal/organizationsync/service.go
+          grep --quiet "LockOrganizationByID" service/organization-service/internal/store/queries/organizations.sql
+          grep --quiet "FOR UPDATE" service/organization-service/internal/store/queries/organizations.sql
+          grep --quiet "UpdateOrganizationProductProfile" service/organization-service/internal/store/queries/organizations.sql
+          grep --quiet "UpdateOrganizationVerificationStatus" service/organization-service/internal/store/queries/organizations.sql
+          projection_sql="$(awk '
+            /-- name: UpdateOrganizationProjection / {capture=1}
+            capture {print}
+            capture && /;$/ {exit}
+          ' service/organization-service/internal/store/queries/organizations.sql)"
+          grep --quiet 'SET name = \$2' <<< "${projection_sql}"
+          grep --quiet 'slug = \$3' <<< "${projection_sql}"
+          grep --quiet 'status = \$4' <<< "${projection_sql}"
+          ! grep -E 'legal_name|website|country|company_type|verification_status|trust_status|application_role' <<< "${projection_sql}"
+          ! grep -R --line-number --fixed-strings 'POST /api/v1/organizations' service/organization-service/internal
+          ! grep -R --line-number --ignore-case 'clerk.*secret' service/organization-service/internal/organizationonboarding
 
       - name: Validate Organization Go module
         shell: bash
@@ -152,18 +169,19 @@ jobs:
             exit 1
           fi
           printf '%s\n' "${first}"
-          grep --quiet '"count":2' <<< "${first}"
+          grep --quiet '"count":3' <<< "${first}"
           second="$(docker compose run --rm organization-migrate up)"
           printf '%s\n' "${second}"
           grep --quiet '"count":0' <<< "${second}"
           version="$(docker compose run --rm organization-migrate version)"
           printf '%s\n' "${version}"
-          grep --quiet '"version":2' <<< "${version}"
+          grep --quiet '"version":3' <<< "${version}"
           status="$(docker compose run --rm organization-migrate status)"
           printf '%s\n' "${status}"
           grep --quiet '000001_create_organization_foundation.sql' <<< "${status}"
           grep --quiet '000002_complete_organization_domain.sql' <<< "${status}"
-          grep --quiet '"state":"applied"' <<< "${status}"
+          grep --quiet '000003_add_owner_bootstrap_state.sql' <<< "${status}"
+          test "$(grep -c '"state":"applied"' <<< "${status}")" -ge 3
           postgres_id="$(docker compose ps -q organization-postgres)"
           postgres_user="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_USER=//p')"
           postgres_db="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${postgres_id}" | sed -n 's/^POSTGRES_DB=//p')"
@@ -180,9 +198,19 @@ jobs:
               select count(*) = 5 from organization.roles;
               select count(*) = 7 from organization.permissions;
               select count(*) = 17 from organization.role_permissions;
-            " | grep --count ' t' | grep --quiet '^7$'
+              select exists (
+                select 1 from information_schema.columns
+                where table_schema='organization' and table_name='organizations'
+                  and column_name='clerk_created_by_user_id'
+              );
+              select exists (
+                select 1 from information_schema.columns
+                where table_schema='organization' and table_name='organizations'
+                  and column_name='owner_bootstrapped'
+              );
+            " | grep --count ' t' | grep --quiet '^9$'
 
-      - name: Verify v1 to v2 Organization domain migration
+      - name: Verify v1 through v3 Organization migrations
         shell: bash
         run: |
           set -euo pipefail
@@ -212,7 +240,7 @@ jobs:
             --workdir /src/service/organization-service \
             --env "ORGANIZATION_MIGRATION_TEST_DATABASE_URL=${migration_test_url}" \
             golang:1.26.5-bookworm \
-            go test -race -run '^TestDomainMigrationUpgradesExistingRowsSafely$' ./migrations
+            go test -race -run '^(TestDomainMigrationUpgradesExistingRowsSafely|TestOnboardingMigrationPreservesExistingAuthorization)$' ./migrations
           unset migration_test_url
           docker compose exec -T organization-postgres psql \
             --username "${postgres_user}" \
@@ -229,6 +257,10 @@ jobs:
       - name: Verify Organization synchronization and authorization
         shell: bash
         run: bash .github/scripts/verify-organization-integration.sh
+
+      - name: Verify Organization onboarding ownership and webhook reconciliation
+        shell: bash
+        run: bash .github/scripts/verify-organization-onboarding.sh
 
       - name: Verify membership conflict and concurrency regressions
         shell: bash
@@ -260,7 +292,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for service in identity-service identity-postgres organization-service organization-postgres; do
+          for service in identity-service organization-service identity-postgres organization-postgres; do
             container_id="$(docker compose ps -q "${service}")"
             test -n "${container_id}"
             port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${container_id}")"
