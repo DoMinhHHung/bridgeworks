@@ -200,8 +200,12 @@ func runOwnerConcurrencyRegressions(t *testing.T, ctx context.Context, pool *pgx
 		organizationID, members := seedConcurrencyOrganization(t, ctx, pool, []string{membershipadmin.RoleOwner, membershipadmin.RoleOwner})
 		service := membershipadmin.New(store.New(pool), concurrencyProvider{}, nil)
 		errs := runConcurrentOperations(
-			func() error { return service.SetRole(ctx, concurrencyActor(organizationID, members[0]), members[0].ID, membershipadmin.RoleAdmin) },
-			func() error { return service.SetRole(ctx, concurrencyActor(organizationID, members[1]), members[1].ID, membershipadmin.RoleAdmin) },
+			func() error {
+				return service.SetRole(ctx, concurrencyActor(organizationID, members[0]), members[0].ID, membershipadmin.RoleAdmin)
+			},
+			func() error {
+				return service.SetRole(ctx, concurrencyActor(organizationID, members[1]), members[1].ID, membershipadmin.RoleAdmin)
+			},
 		)
 		assertOneSuccessAndOne(t, errs, membershipadmin.ErrLastOwner)
 		assertEffectiveOwners(t, ctx, pool, organizationID, 1)
@@ -215,8 +219,12 @@ func runOwnerConcurrencyRegressions(t *testing.T, ctx context.Context, pool *pgx
 		})
 		service := membershipadmin.New(store.New(pool), concurrencyProvider{}, nil)
 		errs := runConcurrentOperations(
-			func() error { return service.TransferOwnership(ctx, concurrencyActor(organizationID, members[0]), members[2].ID) },
-			func() error { return service.SetRole(ctx, concurrencyActor(organizationID, members[1]), members[1].ID, membershipadmin.RoleAdmin) },
+			func() error {
+				return service.TransferOwnership(ctx, concurrencyActor(organizationID, members[0]), members[2].ID)
+			},
+			func() error {
+				return service.SetRole(ctx, concurrencyActor(organizationID, members[1]), members[1].ID, membershipadmin.RoleAdmin)
+			},
 		)
 		for _, err := range errs {
 			if err != nil {
