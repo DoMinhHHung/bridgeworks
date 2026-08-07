@@ -23,6 +23,8 @@ type Dependencies struct {
 	Onboarding                OrganizationOnboarding
 	BusinessEmailVerification BusinessEmailVerification
 	MembershipAdministration  MembershipAdministration
+	PlatformReview            PlatformReview
+	OrganizationAudit         OrganizationAudit
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
@@ -51,11 +53,14 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	router.Method(http.MethodPost, "/organizations/current/verification", authenticated(RequestCurrentOrganizationVerification(dependencies.CurrentResolver, dependencies.Onboarding)))
 	router.Method(http.MethodPost, "/organizations/current/business-email-verification", authenticated(VerifyCurrentOrganizationBusinessEmail(dependencies.CurrentResolver, dependencies.BusinessEmailVerification)))
 	router.Method(http.MethodPost, "/organizations/current/invitations", authenticated(CreateCurrentOrganizationInvitation(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
+	router.Method(http.MethodGet, "/organizations/current/audit-events", authenticated(CurrentOrganizationAuditEvents(dependencies.CurrentResolver, dependencies.OrganizationAudit)))
 	router.Method(http.MethodGet, "/organizations/current/membership", authenticated(CurrentMembership(dependencies.CurrentResolver)))
 	router.Method(http.MethodDelete, "/organizations/current/membership", authenticated(LeaveCurrentOrganization(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
 	router.Method(http.MethodPatch, "/organizations/current/members/{membershipID}/role", authenticated(PatchCurrentOrganizationMemberRole(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
 	router.Method(http.MethodDelete, "/organizations/current/members/{membershipID}", authenticated(RemoveCurrentOrganizationMember(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
 	router.Method(http.MethodPost, "/organizations/current/ownership-transfer", authenticated(TransferCurrentOrganizationOwnership(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
+	router.Method(http.MethodGet, "/platform/organizations/verification-queue", authenticated(PlatformVerificationQueue(dependencies.PlatformReview)))
+	router.Method(http.MethodPost, "/platform/organizations/{organizationID}/verification-decisions", authenticated(PlatformVerificationDecision(dependencies.PlatformReview)))
 
 	return router
 }
