@@ -8,11 +8,11 @@ import (
 
 func validEnvironment() map[string]string {
 	return map[string]string{
-		"DATABASE_URL":                              "postgres://user:password@organization-postgres:5432/db",
-		"CLERK_JWT_KEY":                             "public-key",
-		"CLERK_ISSUER":                              "https://clerk.example.test",
-		"CLERK_AUTHORIZED_PARTIES":                  "http://localhost:3000,https://app.example.test",
-		"CLERK_SECRET_KEY":                          "sk_test_local",
+		"DATABASE_URL":             "postgres://user:password@organization-postgres:5432/db",
+		"CLERK_JWT_KEY":            "public-key",
+		"CLERK_ISSUER":             "https://clerk.example.test",
+		"CLERK_AUTHORIZED_PARTIES": "http://localhost:3000,https://app.example.test",
+		"CLERK_SECRET_KEY":         "sk_test_local",
 		"CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET": "whsec_test",
 		"ORGANIZATION_PERSONAL_EMAIL_DOMAINS":       "gmail.com,outlook.com",
 	}

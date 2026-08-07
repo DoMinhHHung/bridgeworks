@@ -378,10 +378,10 @@ func TestPendingRemovalRetriesProviderAndTimeoutKeepsAuthorizationFence(t *testi
 
 func TestInvitationProviderFailureSemantics(t *testing.T) {
 	for _, testCase := range []struct {
-		name          string
-		providerErr   error
-		wantErr       error
-		wantIntent    bool
+		name        string
+		providerErr error
+		wantErr     error
+		wantIntent  bool
 	}{
 		{name: "timeout preserves intent", providerErr: ProviderErrUnavailable, wantErr: ErrProviderUnavailable, wantIntent: true},
 		{name: "duplicate cleans intent", providerErr: ProviderErrConflict, wantErr: ErrInvitationConflict},

@@ -40,7 +40,7 @@ func TestCreateInvitationUsesProviderMemberRoleAndOpaqueLocalIntent(t *testing.T
 	if err := client.CreateInvitation(context.Background(), membershipadmin.InvitationProviderRequest{
 		ClerkOrganizationID: "org_test",
 		ClerkInviterUserID:  "user_inviter",
-		EmailAddress:         "person@company.example",
+		EmailAddress:        "person@company.example",
 		InvitationIntentID:  intentID,
 	}); err != nil {
 		t.Fatalf("CreateInvitation() error = %v", err)

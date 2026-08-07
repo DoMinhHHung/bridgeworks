@@ -51,12 +51,12 @@ type Organization struct {
 }
 
 type Membership struct {
-	ID                uuid.UUID
-	OrganizationID    uuid.UUID
-	ClerkUserID       string
-	ApplicationRole   string
-	Status            string
-	RemovalPending    bool
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	ClerkUserID     string
+	ApplicationRole string
+	Status          string
+	RemovalPending  bool
 }
 
 type InvitationIntent struct {
@@ -91,7 +91,7 @@ type IDGenerator interface {
 type InvitationProviderRequest struct {
 	ClerkOrganizationID string
 	ClerkInviterUserID  string
-	EmailAddress         string
+	EmailAddress        string
 	InvitationIntentID  uuid.UUID
 }
 
@@ -148,7 +148,7 @@ func (s *Service) Invite(
 	providerErr := s.provider.CreateInvitation(ctx, InvitationProviderRequest{
 		ClerkOrganizationID: organization.ClerkOrganizationID,
 		ClerkInviterUserID:  clerkInviterUserID,
-		EmailAddress:         email,
+		EmailAddress:        email,
 		InvitationIntentID:  intentID,
 	})
 	if providerErr == nil {
@@ -574,7 +574,7 @@ func normalizeInvitationEmail(raw string) (string, error) {
 			if r > unicode.MaxASCII || !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
 				return "", ErrInvalidEmail
 			}
-	}
+		}
 	}
 	return local + "@" + domain, nil
 }

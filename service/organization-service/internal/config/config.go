@@ -287,7 +287,7 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		ClerkAuthorizedParties: clerkAuthorizedParties, ClerkAuthLeeway: clerkAuthLeeway,
 		ClerkSecretKey: clerkSecretKey, ClerkBackendAPIURL: clerkBackendAPIURL,
 		ClerkBackendAPITimeout: clerkBackendAPITimeout,
-		WebhookSigningSecret: webhookSigningSecret, WebhookProcessTimeout: webhookProcessTimeout,
+		WebhookSigningSecret:   webhookSigningSecret, WebhookProcessTimeout: webhookProcessTimeout,
 		WebhookMaxBodyBytes:     webhookMaxBodyBytes,
 		IdentityServiceURL:      identityServiceURL,
 		IdentityServiceAuthMode: identityServiceAuthMode,

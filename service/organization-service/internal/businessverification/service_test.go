@@ -44,7 +44,7 @@ func (u *fakeBusinessUOW) UpdateBusinessEmailVerification(_ context.Context, _ u
 	u.verifiedBy = verifiedBy
 	return nil
 }
-func (u *fakeBusinessUOW) Commit(context.Context) error { u.commits++; return nil }
+func (u *fakeBusinessUOW) Commit(context.Context) error   { u.commits++; return nil }
 func (u *fakeBusinessUOW) Rollback(context.Context) error { u.rollbacks++; return nil }
 
 func businessActor() authorization.ActorContext {

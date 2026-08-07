@@ -358,17 +358,17 @@ func (u *onboardingUnitOfWork) Rollback(ctx context.Context) error { return u.tx
 
 func currentOrganizationFromRow(row sqlcgen.OrganizationOrganization) currentorganization.Organization {
 	organization := currentorganization.Organization{
-		ID:                   row.ID,
-		Name:                 row.Name,
-		Slug:                 row.Slug,
-		Status:               row.Status,
-		LegalName:            row.LegalName,
-		Website:              row.Website,
-		Country:              row.Country,
-		CompanyType:          row.CompanyType,
-		VerificationStatus:   row.VerificationStatus,
-		TrustStatus:          row.TrustStatus,
-		BusinessEmailDomain:  row.BusinessEmailDomain,
+		ID:                  row.ID,
+		Name:                row.Name,
+		Slug:                row.Slug,
+		Status:              row.Status,
+		LegalName:           row.LegalName,
+		Website:             row.Website,
+		Country:             row.Country,
+		CompanyType:         row.CompanyType,
+		VerificationStatus:  row.VerificationStatus,
+		TrustStatus:         row.TrustStatus,
+		BusinessEmailDomain: row.BusinessEmailDomain,
 	}
 	if row.BusinessEmailVerifiedAt.Valid {
 		verifiedAt := row.BusinessEmailVerifiedAt.Time.UTC()
