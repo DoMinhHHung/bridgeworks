@@ -14,14 +14,14 @@ import (
 )
 
 const (
-	legacyOrganizationID       = "018f0c76-8f6c-7cc4-8000-000000000031"
-	legacyAdminMembershipID    = "018f0c76-8f6c-7cc4-8000-000000000032"
-	legacyViewerMembershipID   = "018f0c76-8f6c-7cc4-8000-000000000033"
-	postV3OrganizationID       = "018f0c76-8f6c-7cc4-8000-000000000034"
-	legacyClerkOrganizationID  = "org_onboarding_legacy"
-	legacyAdminClerkUserID     = "user_onboarding_legacy_admin"
-	legacyViewerClerkUserID    = "user_onboarding_legacy_creator"
-	legacyAdminClerkMembership = "mem_onboarding_legacy_admin"
+	legacyOrganizationID        = "018f0c76-8f6c-7cc4-8000-000000000031"
+	legacyAdminMembershipID     = "018f0c76-8f6c-7cc4-8000-000000000032"
+	legacyViewerMembershipID    = "018f0c76-8f6c-7cc4-8000-000000000033"
+	postV3OrganizationID        = "018f0c76-8f6c-7cc4-8000-000000000034"
+	legacyClerkOrganizationID   = "org_onboarding_legacy"
+	legacyAdminClerkUserID      = "user_onboarding_legacy_admin"
+	legacyViewerClerkUserID     = "user_onboarding_legacy_creator"
+	legacyAdminClerkMembership  = "mem_onboarding_legacy_admin"
 	legacyViewerClerkMembership = "mem_onboarding_legacy_viewer"
 )
 
