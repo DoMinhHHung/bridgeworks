@@ -26,12 +26,12 @@ type platformAccessResponse struct {
 func platformAccessResponseHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		appendVaryHeader(w.Header(), "Authorization")
+		appendPlatformAccessVaryHeader(w.Header(), "Authorization")
 		next.ServeHTTP(w, r)
 	})
 }
 
-func appendVaryHeader(header http.Header, value string) {
+func appendPlatformAccessVaryHeader(header http.Header, value string) {
 	for _, existing := range header.Values("Vary") {
 		for _, part := range strings.Split(existing, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), value) {
