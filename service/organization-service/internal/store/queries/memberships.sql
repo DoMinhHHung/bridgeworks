@@ -5,12 +5,12 @@ FROM organization.memberships
 WHERE clerk_membership_id = $1;
 
 -- name: GetActiveMembershipByOrganizationUser :one
-SELECT id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
-       application_role, status, created_at, updated_at
+SELECT m.id, m.clerk_membership_id, m.organization_id, m.clerk_user_id, m.clerk_role,
+       m.application_role, m.status, m.created_at, m.updated_at
 FROM organization.memberships m
-WHERE organization_id = $1
-  AND clerk_user_id = $2
-  AND status = 'active'
+WHERE m.organization_id = $1
+  AND m.clerk_user_id = $2
+  AND m.status = 'active'
   AND NOT EXISTS (
       SELECT 1
       FROM organization.membership_removal_intents r
