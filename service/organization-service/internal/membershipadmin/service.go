@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authorization"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationaudit"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform/safeerr"
 	"github.com/google/uuid"
 )
@@ -76,6 +77,7 @@ type UnitOfWork interface {
 	UpdateMembershipRole(context.Context, uuid.UUID, uuid.UUID, string) error
 	InsertRemovalIntent(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (bool, error)
 	DeleteRemovalIntent(context.Context, uuid.UUID, uuid.UUID) error
+	InsertAuditEvent(context.Context, organizationaudit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
 }
@@ -157,8 +159,6 @@ func (s *Service) Invite(
 
 	switch {
 	case errors.Is(providerErr, ErrUpstreamUnavailable):
-		// The provider may have accepted the request before the timeout. Preserve
-		// the intent so a later verified membership webhook can still reconcile it.
 		return InvitationResult{}, ErrProviderUnavailable
 	case errors.Is(providerErr, ErrUpstreamConflict):
 		_ = s.deleteInvitationIntent(ctx, actor.OrganizationID, intentID)
@@ -211,6 +211,24 @@ func (s *Service) SetRole(
 		if err := uow.UpdateMembershipRole(ctx, actor.OrganizationID, target.ID, role); err != nil {
 			return safeerr.Wrap("update local membership role", err)
 		}
+		fromRole := target.ApplicationRole
+		toRole := role
+		subject := target.ID
+		event, err := organizationaudit.TenantEvent(
+			actor.OrganizationID,
+			organizationaudit.EventMembershipRoleChanged,
+			actor.IdentityUserID,
+			actor.MembershipID,
+			&subject,
+			&fromRole,
+			&toRole,
+		)
+		if err != nil {
+			return safeerr.Wrap("create membership role audit event", err)
+		}
+		if err := uow.InsertAuditEvent(ctx, event); err != nil {
+			return safeerr.Wrap("append membership role audit event", err)
+		}
 	}
 	if err := uow.Commit(ctx); err != nil {
 		return safeerr.Wrap("commit local membership role update", err)
@@ -251,6 +269,22 @@ func (s *Service) TransferOwnership(
 	}
 	if err := uow.UpdateMembershipRole(ctx, actor.OrganizationID, actorMembership.ID, RoleAdmin); err != nil {
 		return safeerr.Wrap("demote ownership transfer actor", err)
+	}
+	subject := target.ID
+	event, err := organizationaudit.TenantEvent(
+		actor.OrganizationID,
+		organizationaudit.EventOrganizationOwnershipTransferred,
+		actor.IdentityUserID,
+		actor.MembershipID,
+		&subject,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return safeerr.Wrap("create ownership transfer audit event", err)
+	}
+	if err := uow.InsertAuditEvent(ctx, event); err != nil {
+		return safeerr.Wrap("append ownership transfer audit event", err)
 	}
 	if err := uow.Commit(ctx); err != nil {
 		return safeerr.Wrap("commit ownership transfer", err)
@@ -317,6 +351,22 @@ func (s *Service) createInvitationIntent(
 		CreatedByIdentityUserID: actor.IdentityUserID,
 	}); err != nil {
 		return Organization{}, safeerr.Wrap("insert invitation intent", err)
+	}
+	toRole := role
+	event, err := organizationaudit.TenantEvent(
+		actor.OrganizationID,
+		organizationaudit.EventMembershipInvitationRequested,
+		actor.IdentityUserID,
+		actor.MembershipID,
+		nil,
+		nil,
+		&toRole,
+	)
+	if err != nil {
+		return Organization{}, safeerr.Wrap("create invitation audit event", err)
+	}
+	if err := uow.InsertAuditEvent(ctx, event); err != nil {
+		return Organization{}, safeerr.Wrap("append invitation audit event", err)
 	}
 	if err := uow.Commit(ctx); err != nil {
 		return Organization{}, safeerr.Wrap("commit invitation intent", err)
@@ -439,8 +489,31 @@ func (s *Service) requestRemoval(
 		return ErrMembershipNotFound
 	}
 	if !target.RemovalPending {
-		if _, err := uow.InsertRemovalIntent(ctx, target.ID, actor.OrganizationID, actor.IdentityUserID); err != nil {
+		inserted, err := uow.InsertRemovalIntent(ctx, target.ID, actor.OrganizationID, actor.IdentityUserID)
+		if err != nil {
 			return safeerr.Wrap("reserve membership removal", err)
+		}
+		if inserted {
+			subject := target.ID
+			eventType := organizationaudit.EventMembershipRemovalRequested
+			if self {
+				eventType = organizationaudit.EventMembershipLeaveRequested
+			}
+			event, err := organizationaudit.TenantEvent(
+				actor.OrganizationID,
+				eventType,
+				actor.IdentityUserID,
+				actor.MembershipID,
+				&subject,
+				nil,
+				nil,
+			)
+			if err != nil {
+				return safeerr.Wrap("create membership removal audit event", err)
+			}
+			if err := uow.InsertAuditEvent(ctx, event); err != nil {
+				return safeerr.Wrap("append membership removal audit event", err)
+			}
 		}
 	}
 	if err := uow.Commit(ctx); err != nil {
@@ -454,13 +527,8 @@ func (s *Service) requestRemoval(
 	})
 	switch {
 	case providerErr == nil, errors.Is(providerErr, ErrUpstreamNotFound):
-		// Local status remains active only in the provider projection table. The
-		// removal reservation excludes authorization until the signed delete
-		// webhook reconciles and clears the reservation.
 		return nil
 	case errors.Is(providerErr, ErrUpstreamUnavailable):
-		// Keep the reservation. A later identical command retries the provider
-		// delete instead of silently treating the pending state as completed.
 		return ErrProviderUnavailable
 	case errors.Is(providerErr, ErrUpstreamConflict), errors.Is(providerErr, ErrUpstreamRejected):
 		if cleanupErr := s.deleteRemovalIntent(ctx, actor.OrganizationID, target.ID); cleanupErr != nil {
@@ -574,7 +642,7 @@ func normalizeInvitationEmail(raw string) (string, error) {
 			if r > unicode.MaxASCII || (r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9')) {
 				return "", ErrInvalidEmail
 			}
-		}
+	}
 	}
 	return local + "@" + domain, nil
 }
