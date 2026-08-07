@@ -262,10 +262,23 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 }
 
 func (s *Service) bootstrapInitialOwner(ctx context.Context, uow UnitOfWork, organization Organization) error {
-	if !organization.OwnerBootstrapEligible || organization.OwnerBootstrapped || organization.Status != "active" || organization.ClerkCreatedByUserID == nil {
+	if !organization.OwnerBootstrapEligible || organization.OwnerBootstrapped || organization.ClerkCreatedByUserID == nil {
 		return nil
 	}
 	creatorID := *organization.ClerkCreatedByUserID
+	hasDeletedMembership, err := uow.HasDeletedMembership(ctx, organization.ID, creatorID)
+	if err != nil {
+		return safeerr.Wrap("load deleted creator membership history for owner bootstrap", err)
+	}
+	if hasDeletedMembership {
+		if err := uow.DisableOrganizationOwnerBootstrapEligibility(ctx, organization.ID); err != nil {
+			return safeerr.Wrap("disable organization owner bootstrap eligibility", err)
+		}
+		return nil
+	}
+	if organization.Status != "active" {
+		return nil
+	}
 	membership, found, err := uow.GetActiveMembership(ctx, organization.ID, creatorID)
 	if err != nil {
 		return safeerr.Wrap("load creator membership for owner bootstrap", err)
