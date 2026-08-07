@@ -181,7 +181,7 @@ RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
 
 type SetOrganizationCreatorParams struct {
 	ClerkOrganizationID  string
-	ClerkCreatedByUserID string
+	ClerkCreatedByUserID *string
 }
 
 func (q *Queries) SetOrganizationCreator(ctx context.Context, arg SetOrganizationCreatorParams) (OrganizationOrganization, error) {
