@@ -37,6 +37,13 @@ RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
           clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
 
+-- name: DisableOrganizationOwnerBootstrapEligibility :exec
+UPDATE organization.organizations
+SET owner_bootstrap_eligible = false
+WHERE id = $1
+  AND owner_bootstrap_eligible = true
+  AND owner_bootstrapped = false;
+
 -- name: MarkOrganizationOwnerBootstrapped :exec
 UPDATE organization.organizations
 SET owner_bootstrapped = true
