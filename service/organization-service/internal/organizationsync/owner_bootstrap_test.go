@@ -12,13 +12,31 @@ func (u *fakeUnitOfWork) SetOrganizationCreator(_ context.Context, _ string, cle
 	return nil
 }
 
+func (u *fakeUnitOfWork) DisableOrganizationOwnerBootstrapEligibility(context.Context, uuid.UUID) error {
+	u.organization.OwnerBootstrapEligible = false
+	return nil
+}
+
 func (u *fakeUnitOfWork) MarkOrganizationOwnerBootstrapped(context.Context, uuid.UUID) error {
 	u.organization.OwnerBootstrapped = true
 	return nil
 }
 
-func (u *fakeUnitOfWork) HasMembership(context.Context, uuid.UUID, string) (bool, error) {
-	return u.membershipFound || u.activeFound, nil
+func (u *fakeUnitOfWork) HasDeletedMembership(_ context.Context, organizationID uuid.UUID, clerkUserID string) (bool, error) {
+	if u.membershipFound &&
+		u.membership.OrganizationID == organizationID &&
+		u.membership.ClerkUserID == clerkUserID &&
+		(u.membership.Status == "deleted" || u.markMembershipDeletedCalls > 0) {
+		return true, nil
+	}
+	for _, membership := range u.insertedMemberships {
+		if membership.OrganizationID == organizationID &&
+			membership.ClerkUserID == clerkUserID &&
+			membership.Status == "deleted" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (u *fakeUnitOfWork) UpdateMembershipApplicationRole(_ context.Context, _ uuid.UUID, role string) error {
@@ -98,6 +116,29 @@ func TestOwnerBootstrapMembershipBeforeOrganization(t *testing.T) {
 	}
 }
 
+func TestOwnerBootstrapCreatorWithoutMembershipHistoryRemainsEligible(t *testing.T) {
+	creator := "user-creator"
+	uow := newFakeUnitOfWork()
+	uow.organizationFound = true
+	uow.organization = Organization{
+		ID:                     testOrganizationID,
+		Status:                 "active",
+		ClerkCreatedByUserID:   &creator,
+		OwnerBootstrapEligible: true,
+	}
+	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+
+	if err := service.Process(context.Background(), organizationEvent(EventOrganizationUpdated)); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if !uow.organization.OwnerBootstrapEligible {
+		t.Fatal("creator with no membership history lost initial bootstrap eligibility")
+	}
+	if uow.organization.OwnerBootstrapped {
+		t.Fatal("owner bootstrap completed without an active creator membership")
+	}
+}
+
 func TestOwnerBootstrapLegacyOrganizationNeverElevatesHistoricalCreator(t *testing.T) {
 	creator := "user-legacy-creator"
 	uow := newFakeUnitOfWork()
@@ -161,7 +202,7 @@ func TestOwnerBootstrapRequiresActiveOrganization(t *testing.T) {
 	}
 }
 
-func TestOwnerBootstrapRequiresActiveCreatorMembership(t *testing.T) {
+func TestOwnerBootstrapDeletedCreatorHistoryCancelsEligibility(t *testing.T) {
 	creator := "user-inactive-creator"
 	uow := newFakeUnitOfWork()
 	uow.organizationFound = true
@@ -182,8 +223,81 @@ func TestOwnerBootstrapRequiresActiveCreatorMembership(t *testing.T) {
 	if err := service.Process(context.Background(), organizationEvent(EventOrganizationUpdated)); err != nil {
 		t.Fatalf("Process() error = %v", err)
 	}
+	if uow.organization.OwnerBootstrapEligible {
+		t.Fatal("deleted creator history did not permanently cancel bootstrap eligibility")
+	}
 	if uow.organization.OwnerBootstrapped {
-		t.Fatal("inactive creator membership consumed or completed owner bootstrap")
+		t.Fatal("deleted creator history completed owner bootstrap")
+	}
+}
+
+func TestOwnerBootstrapDeletedHistoryBlocksRejoin(t *testing.T) {
+	creator := "user-rejoining-creator"
+	uow := newFakeUnitOfWork()
+	uow.organizationFound = true
+	uow.organization = Organization{
+		ID:                     testOrganizationID,
+		Status:                 "active",
+		ClerkCreatedByUserID:   &creator,
+		OwnerBootstrapEligible: true,
+	}
+	uow.membershipFound = true
+	uow.membership = Membership{
+		ID: testMembershipID, OrganizationID: testOrganizationID,
+		ClerkMembershipID: "mem-old", ClerkUserID: creator,
+		ApplicationRole: RoleAdmin, Status: "deleted",
+	}
+	uow.activeFound = true
+	uow.activeMembership = Membership{
+		ID: testSecondID, OrganizationID: testOrganizationID,
+		ClerkMembershipID: "mem-rejoin", ClerkUserID: creator,
+		ApplicationRole: RoleViewer, Status: "active",
+	}
+	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+
+	if err := service.Process(context.Background(), organizationEvent(EventOrganizationUpdated)); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if uow.organization.OwnerBootstrapEligible {
+		t.Fatal("rejoin did not cancel historical creator bootstrap eligibility")
+	}
+	if uow.organization.OwnerBootstrapped {
+		t.Fatal("rejoining creator completed owner bootstrap")
+	}
+	if uow.activeMembership.ApplicationRole != RoleViewer {
+		t.Fatalf("rejoining creator role = %q, want viewer", uow.activeMembership.ApplicationRole)
+	}
+}
+
+func TestCreatorMembershipDeleteCancelsEligibilityInSameTransaction(t *testing.T) {
+	creator := "user-1"
+	uow := newFakeUnitOfWork()
+	uow.organizationFound = true
+	uow.organization = Organization{
+		ID:                     testOrganizationID,
+		Status:                 "disabled",
+		ClerkCreatedByUserID:   &creator,
+		OwnerBootstrapEligible: true,
+	}
+	uow.membershipFound = true
+	uow.membership = Membership{
+		ID: testMembershipID, OrganizationID: testOrganizationID,
+		ClerkMembershipID: "mem-1", ClerkUserID: creator,
+		ApplicationRole: RoleAdmin, Status: "active",
+	}
+	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
+
+	if err := service.Process(context.Background(), membershipEvent(EventMembershipDeleted, stringPointer(ClerkRoleAdmin))); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if uow.markMembershipDeletedCalls != 1 {
+		t.Fatalf("membership delete calls = %d, want 1", uow.markMembershipDeletedCalls)
+	}
+	if uow.organization.OwnerBootstrapEligible {
+		t.Fatal("creator membership deletion did not cancel bootstrap eligibility")
+	}
+	if uow.organization.OwnerBootstrapped {
+		t.Fatal("creator membership deletion completed owner bootstrap")
 	}
 }
 
