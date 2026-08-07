@@ -172,7 +172,7 @@ routes:
   - id: bridgeworks-organization-current
     name: bridgeworks-organization-current
     uri: /api/v1/organizations/current
-    methods: [GET, OPTIONS]
+    methods: [GET, PATCH, OPTIONS]
     upstream_id: organization-cloud-run
     plugins:
       request-id:
@@ -181,7 +181,7 @@ routes:
         algorithm: uuid
       cors:
         allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
-        allow_methods: GET,OPTIONS
+        allow_methods: GET,PATCH,OPTIONS
         allow_headers: Authorization,Content-Type,X-Request-Id
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
@@ -190,6 +190,28 @@ routes:
         audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current
+
+  - id: bridgeworks-organization-current-verification
+    name: bridgeworks-organization-current-verification
+    uri: /api/v1/organizations/current/verification
+    methods: [POST, OPTIONS]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: POST,OPTIONS
+        allow_headers: Authorization,Content-Type,X-Request-Id
+        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
+        max_age: 600
+        allow_credential: false
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /organizations/current/verification
 
   - id: bridgeworks-organization-current-membership
     name: bridgeworks-organization-current-membership

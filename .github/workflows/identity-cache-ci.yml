@@ -52,12 +52,11 @@ jobs:
           git diff --exit-code origin/main...HEAD -- \
             service/identity-service/migrations/000001_create_app_users.sql \
             service/organization-service/migrations/000001_create_organization_foundation.sql \
-            gateway/apisix/conf/apisix.yaml \
             gateway/apisix/conf/config.yaml \
             service/identity-service/internal/store \
             service/identity-service/internal/httpapi
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
-          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "2"
+          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "3"
           grep --quiet 'DATABASE_MAX_CONNS=5' .env.example
           grep --quiet 'DATABASE_MIN_CONNS=0' .env.example
           grep --quiet 'ORGANIZATION_DATABASE_MAX_CONNS=5' .env.example

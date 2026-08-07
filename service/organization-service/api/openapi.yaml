@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BridgeWorks Organization Service API
-  version: 0.2.0
-  description: Organization synchronization, BridgeWorks organization product profile, local membership authorization, and current-organization projections exposed through APISIX.
+  version: 0.3.0
+  description: Organization synchronization, Clerk-owned creation projection, BridgeWorks onboarding product profile, local membership authorization, and current-organization commands exposed through APISIX.
 paths:
   /api/v1/organizations/health/live:
     get:
@@ -34,7 +34,7 @@ paths:
     post:
       summary: Synchronize verified Clerk organization events
       operationId: synchronizeClerkOrganizationWebhook
-      description: Public Svix-signed endpoint. Signature verification occurs on the raw body before narrow decoding. Provider webhooks update only Clerk-owned organization and membership projection fields; BridgeWorks product profile, verification, trust, application roles, and permissions remain locally authoritative.
+      description: Public Svix-signed endpoint. Signature verification occurs on the raw body before narrow decoding. Clerk remains authoritative for provider organization identity, name/slug, creator identity, and memberships. BridgeWorks product profile, verification, trust, application roles, and permissions remain locally authoritative.
       responses:
         "204":
           description: Supported event processed, duplicate or stale event retained, or verified unsupported event ignored
@@ -51,6 +51,7 @@ paths:
     get:
       summary: Return the active local organization projection
       operationId: getCurrentOrganization
+      description: If Clerk has created the active organization but its verified webhook projection has not arrived yet, the API returns organization_not_ready with Retry-After rather than creating a local row from client input.
       security: [{ ClerkSessionToken: [] }]
       responses:
         "200":
@@ -65,6 +66,65 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+    patch:
+      summary: Update BridgeWorks-owned onboarding product profile
+      operationId: patchCurrentOrganization
+      description: Mutates only legal_name, website, country, and company_type for the verified active organization. Tenant identity comes only from the verified Clerk session plus local membership resolution. Provider fields, verification/trust states, application roles, and permissions cannot be supplied here. Requires local organization.manage.
+      security: [{ ClerkSessionToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationProfilePatch" }
+      responses:
+        "200":
+          description: Updated normalized organization projection. Repeating an equivalent normalized patch is idempotent.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentOrganization" }
+        "400": { $ref: "#/components/responses/InvalidRequestAuthenticated" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/RequestTooLargeAuthenticated" }
+        "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
+  /api/v1/organizations/current/verification:
+    options:
+      summary: Browser CORS preflight
+      responses:
+        "204": { description: Preflight accepted for a configured origin }
+    post:
+      summary: Request BridgeWorks company verification
+      operationId: requestCurrentOrganizationVerification
+      description: Customer-side request only. Atomically transitions unverified or rejected to pending; pending is an idempotent success. It never approves or rejects a company. Requires local organization.verify.request.
+      security: [{ ClerkSessionToken: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: Current organization with verification_status pending
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestID" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+            Vary: { $ref: "#/components/headers/VaryAuthorization" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentOrganization" }
+        "400": { $ref: "#/components/responses/InvalidRequestAuthenticated" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/VerificationConflict" }
+        "413": { $ref: "#/components/responses/RequestTooLargeAuthenticated" }
         "503": { $ref: "#/components/responses/ServiceUnavailableAuthenticated" }
   /api/v1/organizations/current/membership:
     options:
@@ -110,7 +170,7 @@ components:
       description: Stable Bearer authentication challenge without token-validation details.
       schema: { type: string, const: 'Bearer realm="bridgeworks"' }
     RetryAfter:
-      description: Suggested retry delay in seconds for eventual-consistency lag.
+      description: Suggested retry delay in seconds. Present for organization_not_ready eventual-consistency conflicts; lifecycle conflicts do not emit it.
       schema: { type: integer, const: 2 }
   responses:
     Unauthorized:
@@ -142,6 +202,27 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    VerificationConflict:
+      description: Verification is already verified or otherwise cannot be requested from its current BridgeWorks lifecycle state. The same endpoint can also return organization_not_ready while the verified Clerk organization is waiting for local projection.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+        Retry-After:
+          description: Present with value 2 only when the conflict code is organization_not_ready. It is omitted for verification_transition_not_allowed.
+          schema: { type: integer, const: 2 }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    InvalidRequestAuthenticated:
+      description: Malformed, unknown, empty, or invalid onboarding input
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
     InvalidWebhook:
       description: Signature, required Svix header, or verified payload is invalid
       headers:
@@ -153,6 +234,15 @@ components:
       description: Webhook body exceeds the configured maximum
       headers:
         X-Request-Id: { $ref: "#/components/headers/RequestID" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RequestTooLargeAuthenticated:
+      description: Onboarding request body exceeds the bounded command limit
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestID" }
+        Cache-Control: { $ref: "#/components/headers/NoStore" }
+        Vary: { $ref: "#/components/headers/VaryAuthorization" }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -180,6 +270,28 @@ components:
       properties:
         status: { type: string, const: ok }
         service: { type: string, const: organization-service }
+    OrganizationProfilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        legal_name:
+          type: [string, "null"]
+          maxLength: 200
+          description: Trimmed legal company name. Null clears the field; a non-null blank value is invalid.
+        website:
+          type: [string, "null"]
+          maxLength: 2048
+          description: Absolute HTTP or HTTPS URL. Credentials and fragments are rejected; scheme/host/default port are normalized. Null clears the field.
+        country:
+          type: [string, "null"]
+          pattern: '^[A-Za-z]{2}$'
+          description: ISO 3166-1 alpha-2 code, normalized to uppercase. Null clears the field.
+        company_type:
+          type: [string, "null"]
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*[A-Za-z0-9]$|^[A-Za-z0-9]$'
+          description: Taxonomy-neutral bounded identifier normalized to lowercase. The product taxonomy is intentionally not frozen in this PR. Null clears the field.
     CurrentOrganization:
       type: object
       additionalProperties: false
@@ -209,11 +321,11 @@ components:
         verification_status:
           type: string
           enum: [unverified, pending, verified, rejected]
-          description: BridgeWorks company-verification lifecycle. It is not derived from Clerk organization lifecycle.
+          description: BridgeWorks company-verification lifecycle. Client profile PATCH cannot set this field directly.
         trust_status:
           type: string
           const: unassessed
-          description: BridgeWorks trust lifecycle placeholder. Additional trust states are intentionally not defined until a trust/fraud policy is approved.
+          description: BridgeWorks trust lifecycle placeholder. Client onboarding commands cannot mutate it.
     CurrentMembership:
       type: object
       additionalProperties: false

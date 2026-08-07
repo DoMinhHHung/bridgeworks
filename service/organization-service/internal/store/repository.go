@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/currentorganization"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationonboarding"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationsync"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform/safeerr"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/store/sqlcgen"
@@ -48,6 +49,14 @@ func (r *Repository) Begin(ctx context.Context) (organizationsync.UnitOfWork, er
 	return &unitOfWork{tx: tx, queries: r.queries.WithTx(tx)}, nil
 }
 
+func (r *Repository) BeginOnboarding(ctx context.Context) (organizationonboarding.UnitOfWork, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &onboardingUnitOfWork{tx: tx, queries: r.queries.WithTx(tx)}, nil
+}
+
 func (r *Repository) GetOrganizationByClerkID(ctx context.Context, clerkOrganizationID string) (currentorganization.Organization, bool, error) {
 	row, err := r.queries.GetOrganizationByClerkID(ctx, clerkOrganizationID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -56,18 +65,7 @@ func (r *Repository) GetOrganizationByClerkID(ctx context.Context, clerkOrganiza
 	if err != nil {
 		return currentorganization.Organization{}, false, safeerr.Wrap("get organization projection", err)
 	}
-	return currentorganization.Organization{
-		ID:                 row.ID,
-		Name:               row.Name,
-		Slug:               row.Slug,
-		Status:             row.Status,
-		LegalName:          row.LegalName,
-		Website:            row.Website,
-		Country:            row.Country,
-		CompanyType:        row.CompanyType,
-		VerificationStatus: row.VerificationStatus,
-		TrustStatus:        row.TrustStatus,
-	}, true, nil
+	return currentOrganizationFromRow(row), true, nil
 }
 
 func (r *Repository) GetActiveMembership(ctx context.Context, organizationID uuid.UUID, clerkUserID string) (currentorganization.Membership, bool, error) {
@@ -159,11 +157,12 @@ func (u *unitOfWork) GetOrganization(ctx context.Context, clerkOrganizationID st
 
 func (u *unitOfWork) InsertOrganization(ctx context.Context, organization organizationsync.Organization) error {
 	_, err := u.queries.InsertOrganization(ctx, sqlcgen.InsertOrganizationParams{
-		ID:                  organization.ID,
-		ClerkOrganizationID: organization.ClerkOrganizationID,
-		Name:                organization.Name,
-		Slug:                organization.Slug,
-		Status:              organization.Status,
+		ID:                   organization.ID,
+		ClerkOrganizationID:  organization.ClerkOrganizationID,
+		Name:                 organization.Name,
+		Slug:                 organization.Slug,
+		Status:               organization.Status,
+		ClerkCreatedByUserID: organization.ClerkCreatedByUserID,
 	})
 	return err
 }
@@ -175,13 +174,28 @@ func (u *unitOfWork) UpdateOrganizationProjection(
 	slug *string,
 	status string,
 ) error {
-	_, err := u.queries.UpdateOrganizationProjection(ctx, sqlcgen.UpdateOrganizationProjectionParams{
+	return u.queries.UpdateOrganizationProjection(ctx, sqlcgen.UpdateOrganizationProjectionParams{
 		ClerkOrganizationID: clerkOrganizationID,
 		Name:                name,
 		Slug:                slug,
 		Status:              status,
 	})
+}
+
+func (u *unitOfWork) SetOrganizationCreator(ctx context.Context, clerkOrganizationID, clerkUserID string) error {
+	_, err := u.queries.SetOrganizationCreator(ctx, sqlcgen.SetOrganizationCreatorParams{
+		ClerkOrganizationID:  clerkOrganizationID,
+		ClerkCreatedByUserID: &clerkUserID,
+	})
 	return err
+}
+
+func (u *unitOfWork) DisableOrganizationOwnerBootstrapEligibility(ctx context.Context, organizationID uuid.UUID) error {
+	return u.queries.DisableOrganizationOwnerBootstrapEligibility(ctx, organizationID)
+}
+
+func (u *unitOfWork) MarkOrganizationOwnerBootstrapped(ctx context.Context, organizationID uuid.UUID) error {
+	return u.queries.MarkOrganizationOwnerBootstrapped(ctx, organizationID)
 }
 
 func (u *unitOfWork) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) error {
@@ -216,6 +230,13 @@ func (u *unitOfWork) GetActiveMembership(
 		return organizationsync.Membership{}, false, err
 	}
 	return membershipFromRow(row), true, nil
+}
+
+func (u *unitOfWork) HasDeletedMembership(ctx context.Context, organizationID uuid.UUID, clerkUserID string) (bool, error) {
+	return u.queries.HasDeletedMembershipByOrganizationUser(ctx, sqlcgen.HasDeletedMembershipByOrganizationUserParams{
+		OrganizationID: organizationID,
+		ClerkUserID:    clerkUserID,
+	})
 }
 
 func (u *unitOfWork) CreateMembershipInsertSavepoint(ctx context.Context) error {
@@ -264,6 +285,14 @@ func (u *unitOfWork) UpdateMembershipClerkRole(ctx context.Context, clerkMembers
 	return err
 }
 
+func (u *unitOfWork) UpdateMembershipApplicationRole(ctx context.Context, membershipID uuid.UUID, role string) error {
+	_, err := u.queries.UpdateMembershipApplicationRole(ctx, sqlcgen.UpdateMembershipApplicationRoleParams{
+		ID:              membershipID,
+		ApplicationRole: role,
+	})
+	return err
+}
+
 func (u *unitOfWork) MarkMembershipDeleted(ctx context.Context, clerkMembershipID string) error {
 	_, err := u.queries.MarkMembershipDeleted(ctx, clerkMembershipID)
 	return err
@@ -272,13 +301,86 @@ func (u *unitOfWork) MarkMembershipDeleted(ctx context.Context, clerkMembershipI
 func (u *unitOfWork) Commit(ctx context.Context) error   { return u.tx.Commit(ctx) }
 func (u *unitOfWork) Rollback(ctx context.Context) error { return u.tx.Rollback(ctx) }
 
+type onboardingUnitOfWork struct {
+	tx      transaction
+	queries *sqlcgen.Queries
+}
+
+func (u *onboardingUnitOfWork) LockOrganization(ctx context.Context, organizationID uuid.UUID) (currentorganization.Organization, bool, error) {
+	row, err := u.queries.LockOrganizationByID(ctx, organizationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return currentorganization.Organization{}, false, nil
+	}
+	if err != nil {
+		return currentorganization.Organization{}, false, err
+	}
+	return currentOrganizationFromRow(row), true, nil
+}
+
+func (u *onboardingUnitOfWork) UpdateProductProfile(
+	ctx context.Context,
+	organizationID uuid.UUID,
+	legalName *string,
+	website *string,
+	country *string,
+	companyType *string,
+) (currentorganization.Organization, error) {
+	row, err := u.queries.UpdateOrganizationProductProfile(ctx, sqlcgen.UpdateOrganizationProductProfileParams{
+		ID:          organizationID,
+		LegalName:   legalName,
+		Website:     website,
+		Country:     country,
+		CompanyType: companyType,
+	})
+	if err != nil {
+		return currentorganization.Organization{}, err
+	}
+	return currentOrganizationFromRow(row), nil
+}
+
+func (u *onboardingUnitOfWork) UpdateVerificationStatus(
+	ctx context.Context,
+	organizationID uuid.UUID,
+	status string,
+) (currentorganization.Organization, error) {
+	row, err := u.queries.UpdateOrganizationVerificationStatus(ctx, sqlcgen.UpdateOrganizationVerificationStatusParams{
+		ID:                 organizationID,
+		VerificationStatus: status,
+	})
+	if err != nil {
+		return currentorganization.Organization{}, err
+	}
+	return currentOrganizationFromRow(row), nil
+}
+
+func (u *onboardingUnitOfWork) Commit(ctx context.Context) error   { return u.tx.Commit(ctx) }
+func (u *onboardingUnitOfWork) Rollback(ctx context.Context) error { return u.tx.Rollback(ctx) }
+
+func currentOrganizationFromRow(row sqlcgen.OrganizationOrganization) currentorganization.Organization {
+	return currentorganization.Organization{
+		ID:                 row.ID,
+		Name:               row.Name,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		LegalName:          row.LegalName,
+		Website:            row.Website,
+		Country:            row.Country,
+		CompanyType:        row.CompanyType,
+		VerificationStatus: row.VerificationStatus,
+		TrustStatus:        row.TrustStatus,
+	}
+}
+
 func organizationFromRow(row sqlcgen.OrganizationOrganization) organizationsync.Organization {
 	return organizationsync.Organization{
-		ID:                  row.ID,
-		ClerkOrganizationID: row.ClerkOrganizationID,
-		Name:                row.Name,
-		Slug:                row.Slug,
-		Status:              row.Status,
+		ID:                     row.ID,
+		ClerkOrganizationID:    row.ClerkOrganizationID,
+		Name:                   row.Name,
+		Slug:                   row.Slug,
+		Status:                 row.Status,
+		ClerkCreatedByUserID:   row.ClerkCreatedByUserID,
+		OwnerBootstrapped:      row.OwnerBootstrapped,
+		OwnerBootstrapEligible: row.OwnerBootstrapEligible,
 	}
 }
 

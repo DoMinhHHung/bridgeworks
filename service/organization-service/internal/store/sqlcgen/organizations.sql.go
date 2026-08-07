@@ -11,9 +11,23 @@ import (
 	"github.com/google/uuid"
 )
 
+const disableOrganizationOwnerBootstrapEligibility = `-- name: DisableOrganizationOwnerBootstrapEligibility :exec
+UPDATE organization.organizations
+SET owner_bootstrap_eligible = false
+WHERE id = $1
+  AND owner_bootstrap_eligible = true
+  AND owner_bootstrapped = false
+`
+
+func (q *Queries) DisableOrganizationOwnerBootstrapEligibility(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, disableOrganizationOwnerBootstrapEligibility, id)
+	return err
+}
+
 const getOrganizationByClerkID = `-- name: GetOrganizationByClerkID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
-       legal_name, website, country, company_type, verification_status, trust_status
+       legal_name, website, country, company_type, verification_status, trust_status,
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 FROM organization.organizations
 WHERE clerk_organization_id = $1
 `
@@ -35,24 +49,29 @@ func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizatio
 		&i.CompanyType,
 		&i.VerificationStatus,
 		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
 
 const insertOrganization = `-- name: InsertOrganization :one
 INSERT INTO organization.organizations (
-    id, clerk_organization_id, name, slug, status
-) VALUES ($1, $2, $3, $4, $5)
+    id, clerk_organization_id, name, slug, status, clerk_created_by_user_id
+) VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
-          legal_name, website, country, company_type, verification_status, trust_status
+          legal_name, website, country, company_type, verification_status, trust_status,
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 type InsertOrganizationParams struct {
-	ID                  uuid.UUID
-	ClerkOrganizationID string
-	Name                *string
-	Slug                *string
-	Status              string
+	ID                   uuid.UUID
+	ClerkOrganizationID  string
+	Name                 *string
+	Slug                 *string
+	Status               string
+	ClerkCreatedByUserID *string
 }
 
 func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganizationParams) (OrganizationOrganization, error) {
@@ -62,6 +81,7 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 		arg.Name,
 		arg.Slug,
 		arg.Status,
+		arg.ClerkCreatedByUserID,
 	)
 	var i OrganizationOrganization
 	err := row.Scan(
@@ -78,6 +98,42 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 		&i.CompanyType,
 		&i.VerificationStatus,
 		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
+	)
+	return i, err
+}
+
+const lockOrganizationByID = `-- name: LockOrganizationByID :one
+SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
+       legal_name, website, country, company_type, verification_status, trust_status,
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
+FROM organization.organizations
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockOrganizationByID(ctx context.Context, id uuid.UUID) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, lockOrganizationByID, id)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -89,7 +145,8 @@ SET name = NULL,
     status = 'deleted'
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
-          legal_name, website, country, company_type, verification_status, trust_status
+          legal_name, website, country, company_type, verification_status, trust_status,
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
@@ -109,33 +166,94 @@ func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganization
 		&i.CompanyType,
 		&i.VerificationStatus,
 		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
 
-const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :one
+const markOrganizationOwnerBootstrapped = `-- name: MarkOrganizationOwnerBootstrapped :exec
 UPDATE organization.organizations
-SET name = $2,
-    slug = $3,
-    status = $4
-WHERE clerk_organization_id = $1
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
-          legal_name, website, country, company_type, verification_status, trust_status
+SET owner_bootstrapped = true
+WHERE id = $1
+  AND owner_bootstrap_eligible = true
+  AND owner_bootstrapped = false
+  AND status = 'active'
+  AND clerk_created_by_user_id IS NOT NULL
 `
 
-type UpdateOrganizationProjectionParams struct {
-	ClerkOrganizationID string
-	Name                *string
-	Slug                *string
-	Status              string
+func (q *Queries) MarkOrganizationOwnerBootstrapped(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markOrganizationOwnerBootstrapped, id)
+	return err
 }
 
-func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) (OrganizationOrganization, error) {
-	row := q.db.QueryRow(ctx, updateOrganizationProjection,
-		arg.ClerkOrganizationID,
-		arg.Name,
-		arg.Slug,
-		arg.Status,
+const setOrganizationCreator = `-- name: SetOrganizationCreator :one
+UPDATE organization.organizations
+SET clerk_created_by_user_id = $2
+WHERE clerk_organization_id = $1
+  AND clerk_created_by_user_id IS NULL
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status,
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
+`
+
+type SetOrganizationCreatorParams struct {
+	ClerkOrganizationID  string
+	ClerkCreatedByUserID *string
+}
+
+func (q *Queries) SetOrganizationCreator(ctx context.Context, arg SetOrganizationCreatorParams) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, setOrganizationCreator, arg.ClerkOrganizationID, arg.ClerkCreatedByUserID)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
+	)
+	return i, err
+}
+
+const updateOrganizationProductProfile = `-- name: UpdateOrganizationProductProfile :one
+UPDATE organization.organizations
+SET legal_name = $2,
+    website = $3,
+    country = $4,
+    company_type = $5
+WHERE id = $1
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status,
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
+`
+
+type UpdateOrganizationProductProfileParams struct {
+	ID          uuid.UUID
+	LegalName   *string
+	Website     *string
+	Country     *string
+	CompanyType *string
+}
+
+func (q *Queries) UpdateOrganizationProductProfile(ctx context.Context, arg UpdateOrganizationProductProfileParams) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, updateOrganizationProductProfile,
+		arg.ID,
+		arg.LegalName,
+		arg.Website,
+		arg.Country,
+		arg.CompanyType,
 	)
 	var i OrganizationOrganization
 	err := row.Scan(
@@ -152,6 +270,72 @@ func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOr
 		&i.CompanyType,
 		&i.VerificationStatus,
 		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
+	)
+	return i, err
+}
+
+const updateOrganizationProjection = `-- name: UpdateOrganizationProjection :exec
+UPDATE organization.organizations
+SET name = $2,
+    slug = $3,
+    status = $4
+WHERE clerk_organization_id = $1
+`
+
+type UpdateOrganizationProjectionParams struct {
+	ClerkOrganizationID string
+	Name                *string
+	Slug                *string
+	Status              string
+}
+
+func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOrganizationProjectionParams) error {
+	_, err := q.db.Exec(ctx, updateOrganizationProjection,
+		arg.ClerkOrganizationID,
+		arg.Name,
+		arg.Slug,
+		arg.Status,
+	)
+	return err
+}
+
+const updateOrganizationVerificationStatus = `-- name: UpdateOrganizationVerificationStatus :one
+UPDATE organization.organizations
+SET verification_status = $2
+WHERE id = $1
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status,
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
+`
+
+type UpdateOrganizationVerificationStatusParams struct {
+	ID                 uuid.UUID
+	VerificationStatus string
+}
+
+func (q *Queries) UpdateOrganizationVerificationStatus(ctx context.Context, arg UpdateOrganizationVerificationStatusParams) (OrganizationOrganization, error) {
+	row := q.db.QueryRow(ctx, updateOrganizationVerificationStatus, arg.ID, arg.VerificationStatus)
+	var i OrganizationOrganization
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkOrganizationID,
+		&i.Name,
+		&i.Slug,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
+		&i.ClerkCreatedByUserID,
+		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }

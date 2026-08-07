@@ -105,7 +105,12 @@ assert_error() {
   grep --quiet '"details":null' "${body}"
 }
 
-# Invalid signature must not mutate Organization database.
+# Invalid signature must not mutate Organization database. Organization CI may
+# intentionally carry a migrated legacy fixture into this suite, so compare to
+# the baseline instead of assuming a globally empty database.
+organizations_before_invalid="$(organization_sql 'select count(*) from organization.organizations')"
+memberships_before_invalid="$(organization_sql 'select count(*) from organization.memberships')"
+webhooks_before_invalid="$(organization_sql 'select count(*) from organization.clerk_webhook_events')"
 cat > "${work}/invalid.json" <<'JSON'
 {"type":"organization.created","timestamp":1785744000000,"data":{"id":"org_ci_invalid","name":"Sensitive Invalid Org","slug":"invalid"}}
 JSON
@@ -115,9 +120,9 @@ invalid_status="$(curl --show-error --silent --output "${work}/invalid-body" --d
   -H 'svix-signature: v1,invalid' --data-binary "@${work}/invalid.json" "${organization_webhook_url}")"
 test "${invalid_status}" = "400"
 assert_error "${work}/invalid-body" invalid_webhook 'invalid webhook request' org-invalid-webhook
-test "$(organization_sql 'select count(*) from organization.organizations')" = "0"
-test "$(organization_sql 'select count(*) from organization.memberships')" = "0"
-test "$(organization_sql 'select count(*) from organization.clerk_webhook_events')" = "0"
+test "$(organization_sql 'select count(*) from organization.organizations')" = "${organizations_before_invalid}"
+test "$(organization_sql 'select count(*) from organization.memberships')" = "${memberships_before_invalid}"
+test "$(organization_sql 'select count(*) from organization.clerk_webhook_events')" = "${webhooks_before_invalid}"
 
 # Synchronize Identity user used by authenticated Organization requests.
 cat > "${work}/identity-user.json" <<'JSON'

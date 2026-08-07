@@ -47,18 +47,7 @@ func CurrentOrganization(resolver CurrentOrganizationResolver) http.HandlerFunc 
 			writeActorError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, organizationResponse{
-			ID:                 result.Organization.ID.String(),
-			Name:               result.Organization.Name,
-			Slug:               result.Organization.Slug,
-			Status:             result.Organization.Status,
-			LegalName:          result.Organization.LegalName,
-			Website:            result.Organization.Website,
-			Country:            result.Organization.Country,
-			CompanyType:        result.Organization.CompanyType,
-			VerificationStatus: result.Organization.VerificationStatus,
-			TrustStatus:        result.Organization.TrustStatus,
-		})
+		writeOrganizationResponse(w, result.Organization)
 	}
 }
 
@@ -75,6 +64,21 @@ func CurrentMembership(resolver CurrentOrganizationResolver) http.HandlerFunc {
 			Permissions:    result.Actor.Permissions(),
 		})
 	}
+}
+
+func writeOrganizationResponse(w http.ResponseWriter, organization currentorganization.Organization) {
+	writeJSON(w, http.StatusOK, organizationResponse{
+		ID:                 organization.ID.String(),
+		Name:               organization.Name,
+		Slug:               organization.Slug,
+		Status:             organization.Status,
+		LegalName:          organization.LegalName,
+		Website:            organization.Website,
+		Country:            organization.Country,
+		CompanyType:        organization.CompanyType,
+		VerificationStatus: organization.VerificationStatus,
+		TrustStatus:        organization.TrustStatus,
+	})
 }
 
 func resolveActor(w http.ResponseWriter, r *http.Request, resolver CurrentOrganizationResolver) (currentorganization.Result, bool) {

@@ -32,17 +32,20 @@ type OrganizationMembership struct {
 }
 
 type OrganizationOrganization struct {
-	ID                  uuid.UUID
-	ClerkOrganizationID string
-	Name                *string
-	Slug                *string
-	Status              string
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-	LegalName           *string
-	Website             *string
-	Country             *string
-	CompanyType         *string
-	VerificationStatus  string
-	TrustStatus         string
+	ID                     uuid.UUID
+	ClerkOrganizationID    string
+	Name                   *string
+	Slug                   *string
+	Status                 string
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	LegalName              *string
+	Website                *string
+	Country                *string
+	CompanyType            *string
+	VerificationStatus     string
+	TrustStatus            string
+	ClerkCreatedByUserID   *string
+	OwnerBootstrapped      bool
+	OwnerBootstrapEligible bool
 }

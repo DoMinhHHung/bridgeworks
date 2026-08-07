@@ -15,11 +15,14 @@ const (
 var ErrActiveMembershipConflict = errors.New("active organization membership conflict")
 
 type Organization struct {
-	ID                  uuid.UUID
-	ClerkOrganizationID string
-	Name                *string
-	Slug                *string
-	Status              string
+	ID                     uuid.UUID
+	ClerkOrganizationID    string
+	Name                   *string
+	Slug                   *string
+	Status                 string
+	ClerkCreatedByUserID   *string
+	OwnerBootstrapped      bool
+	OwnerBootstrapEligible bool
 }
 
 type Membership struct {
@@ -48,15 +51,20 @@ type UnitOfWork interface {
 	GetOrganization(context.Context, string) (Organization, bool, error)
 	InsertOrganization(context.Context, Organization) error
 	UpdateOrganizationProjection(context.Context, string, *string, *string, string) error
+	SetOrganizationCreator(context.Context, string, string) error
+	DisableOrganizationOwnerBootstrapEligibility(context.Context, uuid.UUID) error
+	MarkOrganizationOwnerBootstrapped(context.Context, uuid.UUID) error
 	MarkOrganizationDeleted(context.Context, string) error
 
 	GetMembership(context.Context, string) (Membership, bool, error)
 	GetActiveMembership(context.Context, uuid.UUID, string) (Membership, bool, error)
+	HasDeletedMembership(context.Context, uuid.UUID, string) (bool, error)
 	CreateMembershipInsertSavepoint(context.Context) error
 	RollbackMembershipInsertSavepoint(context.Context) error
 	ReleaseMembershipInsertSavepoint(context.Context) error
 	InsertMembership(context.Context, Membership) error
 	UpdateMembershipClerkRole(context.Context, string, *string) error
+	UpdateMembershipApplicationRole(context.Context, uuid.UUID, string) error
 	MarkMembershipDeleted(context.Context, string) error
 
 	Commit(context.Context) error

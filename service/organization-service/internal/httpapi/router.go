@@ -20,6 +20,7 @@ type Dependencies struct {
 	WebhookTimeout   time.Duration
 	Authenticate     func(http.Handler) http.Handler
 	CurrentResolver  CurrentOrganizationResolver
+	Onboarding       OrganizationOnboarding
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
@@ -42,10 +43,18 @@ func NewRouter(dependencies Dependencies) http.Handler {
 	currentOrganization := AuthenticatedResponseHeaders(
 		dependencies.Authenticate(CurrentOrganization(dependencies.CurrentResolver)),
 	)
+	patchCurrentOrganization := AuthenticatedResponseHeaders(
+		dependencies.Authenticate(PatchCurrentOrganization(dependencies.CurrentResolver, dependencies.Onboarding)),
+	)
+	requestVerification := AuthenticatedResponseHeaders(
+		dependencies.Authenticate(RequestCurrentOrganizationVerification(dependencies.CurrentResolver, dependencies.Onboarding)),
+	)
 	currentMembership := AuthenticatedResponseHeaders(
 		dependencies.Authenticate(CurrentMembership(dependencies.CurrentResolver)),
 	)
 	router.Method(http.MethodGet, "/organizations/current", currentOrganization)
+	router.Method(http.MethodPatch, "/organizations/current", patchCurrentOrganization)
+	router.Method(http.MethodPost, "/organizations/current/verification", requestVerification)
 	router.Method(http.MethodGet, "/organizations/current/membership", currentMembership)
 
 	return router

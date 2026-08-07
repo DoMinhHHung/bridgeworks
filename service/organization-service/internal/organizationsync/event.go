@@ -19,6 +19,7 @@ const (
 	AggregateOrganization = "organization"
 	AggregateMembership   = "membership"
 
+	RoleOwner      = "owner"
 	RoleAdmin      = "admin"
 	RoleViewer     = "viewer"
 	ClerkRoleAdmin = "org:admin"
@@ -38,8 +39,9 @@ type Event struct {
 }
 
 type OrganizationProjection struct {
-	Name *string
-	Slug *string
+	Name      *string
+	Slug      *string
+	CreatedBy *string
 }
 
 type MembershipProjection struct {
@@ -55,9 +57,10 @@ type envelope struct {
 }
 
 type organizationData struct {
-	ID   string  `json:"id"`
-	Name *string `json:"name"`
-	Slug *string `json:"slug"`
+	ID        string  `json:"id"`
+	Name      *string `json:"name"`
+	Slug      *string `json:"slug"`
+	CreatedBy *string `json:"created_by"`
 }
 
 type membershipData struct {
@@ -131,7 +134,11 @@ func Decode(eventID string, payload []byte) (Event, bool, error) {
 	event.AggregateType = AggregateOrganization
 	event.AggregateID = organizationID
 	event.ClerkOrganizationID = organizationID
-	event.Organization = OrganizationProjection{Name: normalizeOptional(data.Name), Slug: normalizeOptional(data.Slug)}
+	event.Organization = OrganizationProjection{
+		Name:      normalizeOptional(data.Name),
+		Slug:      normalizeOptional(data.Slug),
+		CreatedBy: normalizeOptional(data.CreatedBy),
+	}
 	return event, true, nil
 }
 

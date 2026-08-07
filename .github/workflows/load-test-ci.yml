@@ -101,7 +101,11 @@ jobs:
           git diff --exit-code origin/main...HEAD -- \
             service/organization-service/migrations/000001_create_organization_foundation.sql
           git diff --exit-code origin/main...HEAD -- \
-            gateway/apisix/conf/apisix.yaml gateway/apisix/conf/config.yaml
+            service/organization-service/migrations/000002_complete_organization_domain.sql
+          git diff --exit-code origin/main...HEAD -- \
+            gateway/apisix/conf/config.yaml
+          grep --quiet --fixed-strings 'methods: [GET, PATCH, OPTIONS]' gateway/apisix/conf/apisix.yaml
+          grep --quiet --fixed-strings 'uri: /api/v1/organizations/current/verification' gateway/apisix/conf/apisix.yaml
           grep --quiet --fixed-strings 'DATABASE_MAX_CONNS=5' .env.example
           grep --quiet --fixed-strings 'DATABASE_MIN_CONNS=0' .env.example
           grep --quiet --fixed-strings 'ORGANIZATION_DATABASE_MAX_CONNS=5' .env.example

@@ -53,8 +53,10 @@ jobs:
             service/identity-service/migrations/000001_create_app_users.sql
           git diff --exit-code origin/main...HEAD -- \
             service/organization-service/migrations/000001_create_organization_foundation.sql
+          git diff --exit-code origin/main...HEAD -- \
+            service/organization-service/migrations/000002_complete_organization_domain.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
-          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "2"
+          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "3"
 
       - name: Verify private observability topology and bounded contracts
         shell: bash

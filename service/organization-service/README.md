@@ -2,9 +2,9 @@
 
 Organization Service owns the BridgeWorks organization product profile and local authorization boundary while projecting Clerk organizations and memberships.
 
-Clerk remains authoritative for provider organization/session/membership identity. Organization Service is authoritative for BridgeWorks-specific organization product fields, verification/trust state, local application roles, local permissions, authorization policy, and the Clerk organization/membership webhook inbox.
+Clerk remains authoritative for provider organization/session/membership identity. Organization Service is authoritative for BridgeWorks-specific product fields, verification/trust state, local application roles, local permissions, authorization policy, and the Clerk organization/membership webhook inbox.
 
-It does not own user identity, passwords, sessions, talent, jobs, applications, billing, or Identity Service data. This PR does not introduce organization-create, invitation, role-mutation, verification-command, or platform-admin endpoints.
+It does not own user identity, passwords, sessions, talent, jobs, applications, billing, or Identity Service data.
 
 ## Runtime
 
@@ -21,55 +21,145 @@ It does not own user identity, passwords, sessions, talent, jobs, applications, 
 ## Public APISIX paths
 
 ```text
-GET  /api/v1/organizations/health/live
-GET  /api/v1/organizations/health/ready
-POST /api/v1/organizations/webhooks/clerk
-GET  /api/v1/organizations/current
-GET  /api/v1/organizations/current/membership
+GET   /api/v1/organizations/health/live
+GET   /api/v1/organizations/health/ready
+POST  /api/v1/organizations/webhooks/clerk
+GET   /api/v1/organizations/current
+PATCH /api/v1/organizations/current
+POST  /api/v1/organizations/current/verification
+GET   /api/v1/organizations/current/membership
 ```
 
-The service port is private to the Docker network. APISIX is the only host-published HTTP entry point. PR 1 adds no public route.
+The service port is private. APISIX is the public edge. The production Cloud Run route keeps Google platform authentication in `X-Serverless-Authorization` and preserves the caller's Clerk Bearer token in `Authorization`.
+
+There is intentionally no `POST /api/v1/organizations` endpoint.
+
+## Creation and command ownership
+
+Organization creation is provider-owned by Clerk; Organization Service projects the verified organization through Clerk webhooks and owns subsequent BridgeWorks onboarding state.
+
+The product flow is:
+
+```text
+Frontend / Clerk
+    -> create Clerk organization
+    -> Clerk emits signed organization + membership events
+    -> Organization Service transactionally projects provider state
+    -> authenticated BridgeWorks onboarding commands mutate local product fields
+```
+
+This keeps one source of truth for provider organization identity. Organization Service does not call Clerk Backend API to duplicate creation, stores no Clerk Backend secret, and never opens a PostgreSQL transaction around a provider network call.
+
+Clerk webhooks are asynchronous. A valid session can therefore contain an active Clerk organization before its local projection arrives. In that state authenticated APIs return:
+
+```http
+409 Conflict
+Retry-After: 2
+```
+
+with code `organization_not_ready`. The service never creates a local organization from unverified client input to hide webhook latency.
 
 ## Ownership boundary
 
+Clerk owns:
+
+- provider organization identity and Clerk organization ID;
+- provider organization name and slug;
+- organization creator identity exposed by the verified provider organization resource;
+- active organization session context;
+- provider memberships and Clerk membership role.
+
 Organization Service owns:
 
-- Clerk organization mapping and provider/application lifecycle projection;
-- Clerk membership projection;
-- BridgeWorks organization product profile: `legal_name`, `website`, `country`, and `company_type`;
-- BridgeWorks company `verification_status`;
+- Clerk mapping/projection and provider/application lifecycle;
+- BridgeWorks product profile: `legal_name`, `website`, `country`, `company_type`;
+- BridgeWorks `verification_status`;
 - BridgeWorks `trust_status`;
-- BridgeWorks application role assigned to each membership;
-- local role-to-permission mapping;
-- tenant-scoped `ActorContext` construction;
-- organization authorization decisions;
-- Clerk organization/membership webhook inbox.
+- local `application_role` and permissions;
+- tenant-scoped authorization policy;
+- private initial-owner bootstrap eligibility/completion state;
+- webhook inbox, ordering, and reconciliation.
 
-Identity Service remains authoritative for:
+Identity Service remains authoritative for Clerk-user mapping, local Identity UUID, public `id_user`, verified primary-email projection, local account lifecycle, and `/api/v1/me`. Organization Service never queries Identity PostgreSQL and creates no cross-service foreign key.
 
-- Clerk user mapping;
-- local Identity UUID;
-- public `id_user`;
-- verified primary-email projection;
-- local account status;
-- authenticated `/api/v1/me`.
+## Initial owner bootstrap
 
-Organization Service never queries the Identity database, imports no Identity `internal` package, and creates no cross-service foreign key.
+The role catalog includes `owner`, but Clerk role claims are not used as BridgeWorks owner authority.
 
-### Command ownership
+Migration v3 distinguishes organizations that existed before this owner-bootstrap feature from organizations projected afterwards:
 
-The current repository has no Organization-to-Clerk Backend API command adapter. Provider organization/session/membership identity is synchronized into Organization Service through verified Clerk webhooks, and the local service must not create a second uncontrolled source of truth.
+```text
+legacy row existing at v3 migration:
+owner_bootstrap_eligible = false
 
-PR 1 therefore does not add a backend `create organization` or `invite member` endpoint. The onboarding-command PR must re-inspect current `main` and explicitly choose between:
+row inserted after v3:
+owner_bootstrap_eligible = true
+```
 
-- Clerk-owned frontend/provider commands followed by webhook reconciliation; or
-- a reviewed Organization-owned Clerk Backend API adapter with explicit timeout, idempotency, failure, secret-management, and reconciliation semantics.
+The migration first adds `owner_bootstrap_eligible boolean not null default false`, so every pre-existing row is materialized as ineligible, and only then changes the column default to `true` for future inserts. The real PostgreSQL migration regression verifies both sides of that default transition.
 
-No PostgreSQL transaction may be held open around a future Clerk network call.
+`owner_bootstrap_eligible=true` means only that the automatic **initial** owner grant is still permitted. It is not an ownership fact and it is not a reusable authorization credential. `owner_bootstrapped=true` has one meaning only: the automatic initial-owner bootstrap succeeded.
+
+For an eligible newly projected provider organization, Organization Service consumes `created_by` only from the **verified Clerk organization webhook payload** and stores it as private provider metadata. The decision is made inside the existing organization-scoped webhook transaction/advisory-lock boundary.
+
+Before any promotion, synchronization checks deleted membership history for the exact creator:
+
+```text
+creator has never had a projected membership:
+    keep owner_bootstrap_eligible = true
+    wait for the first membership webhook
+
+creator has deleted membership history before bootstrap completion:
+    owner_bootstrap_eligible = false
+    owner_bootstrapped = false
+    never auto-promote that historical creator
+
+creator has an active membership and no deleted membership history:
+    continue evaluating the normal bootstrap gates
+```
+
+Owner bootstrap succeeds only when every gate is true:
+
+```text
+owner_bootstrap_eligible = true
+owner_bootstrapped = false
+organization lifecycle = active
+authoritative created_by exists
+no deleted membership history exists for the exact creator
+exact creator has an active local membership projection
+```
+
+Then and only then:
+
+```text
+local application_role = owner
+owner_bootstrapped = true
+```
+
+Organization and membership webhook delivery can race in either order. The existing organization-scoped advisory lock serializes both paths. If the organization event arrives first and the creator has never had a membership, the creator signal waits for that first membership. If the membership arrives first, it creates an eligible pending local organization and initially uses the compatibility role mapping; the later verified organization projection activates the organization and promotes only the exact creator when no deleted history exists.
+
+Deleted membership history before successful bootstrap permanently cancels the automatic opportunity by transitioning only:
+
+```text
+owner_bootstrap_eligible: true -> false
+owner_bootstrapped:       false -> false
+```
+
+This applies whether the creator is already known when their membership is deleted or whether the verified `created_by` metadata arrives after a deleted creator membership was already projected. A later invitation or rejoin with a new Clerk membership ID does **not** restore eligibility and initializes only through the normal compatibility role mapping. Historical `created_by` therefore never becomes a perpetual privilege-escalation token.
+
+Disabled or deleted organizations do not complete owner bootstrap. A deleted creator membership cannot complete it either; deleted history permanently cancels the automatic path as described above.
+
+The bootstrap marker is a one-time fence after a successful bootstrap. If a future explicit BridgeWorks role change moves that membership away from `owner`, later provider organization events do not re-grant owner.
+
+Legacy organizations are permanently ineligible for this automatic bootstrap path. A later verified Clerk organization payload may safely project its historical `created_by` metadata, but it **must not** promote that historical creator from local `viewer` or `admin` to `owner`. Existing legacy `admin` and `viewer` application roles remain unchanged. `admin` keeps its compatibility administration permissions so legacy organizations are not locked out, but `admin` is not semantically treated as `owner`.
+
+Explicit ownership assignment for legacy organizations, rejoining historical creators, and all later ownership changes belong to a future reviewed local role-management authorization boundary; PR 2 does not infer ownership from provider history.
+
+Clients cannot supply `role=owner`, `created_by`, `owner_bootstrap_eligible`, or the bootstrap marker.
 
 ## Clerk webhook contract
 
-Supported event names are exact:
+Supported event names remain exact:
 
 ```text
 organization.created
@@ -80,73 +170,144 @@ organizationMembership.updated
 organizationMembership.deleted
 ```
 
-The organization decoder projects only Clerk-owned/provider fields such as organization ID, name, slug, and provider lifecycle. Webhook queries do not write BridgeWorks product fields, verification state, trust state, application roles, or local permissions.
+Signature verification occurs on the raw request body before decoding. Supported events enter the existing transactional inbox, duplicate/stale ordering, transaction advisory lock, UUIDv7 projection, and membership savepoint/conflict logic.
 
-The membership decoder reads only:
+Provider organization events mutate only provider-owned projection fields:
 
-- membership ID;
-- nested organization ID;
-- `public_user_data.user_id`;
-- Clerk role.
+```text
+name
+slug
+provider/application lifecycle status
+```
 
-It does not persist email, name, username, avatar, phone, or metadata.
+The verified provider creator signal is private bootstrap metadata. Webhook updates do **not** mutate:
 
-The initial application-role mapping remains intentionally narrow:
+```text
+legal_name
+website
+country
+company_type
+verification_status
+trust_status
+```
+
+and do not generally derive `application_role` from Clerk role claims. The only application-role mutation performed by synchronization is the one-time exact-creator bootstrap for eligible post-v3 organizations described above.
+
+The compatibility initialization remains:
 
 ```text
 org:admin -> admin
 all other Clerk roles -> viewer
 ```
 
-`owner`, `recruiter`, and `delivery_manager` are local BridgeWorks roles and are never inferred from Clerk role or permission claims. After initialization, local `application_role` is authoritative. Clerk webhook updates and JWT role/permission claims do not overwrite it.
+After initialization, local `application_role` remains the authorization authority. Clerk JWT organization role/permission claims do not override it.
+
+## Product profile onboarding command
+
+`PATCH /api/v1/organizations/current` requires local `organization.manage` and may include only:
+
+```json
+{
+  "legal_name": "BridgeWorks Company Limited",
+  "website": "https://example.com",
+  "country": "VN",
+  "company_type": "software-agency"
+}
+```
+
+Fields are partial: omitted means preserve; explicit `null` clears the optional value.
+
+The command cannot mutate local/provider IDs, `name`, `slug`, provider lifecycle status, verification/trust state, application role, or permissions. Tenant authority always comes from the verified Clerk active-organization session plus local Identity/membership/permission resolution; request bodies contain no organization identifier used for authorization.
+
+Validation policy:
+
+- `legal_name`: trim whitespace, non-null values must be nonblank, maximum 200 Unicode code points;
+- `website`: maximum 2048 bytes, absolute HTTP/HTTPS URL, credentials rejected, fragments rejected, scheme/host normalized to lowercase, default `:80`/`:443` removed;
+- `country`: ISO 3166-1 alpha-2, normalized uppercase;
+- `company_type`: taxonomy-neutral bounded identifier, maximum 64 Unicode code points, normalized lowercase, ASCII alphanumeric plus internal `_` or `-` only.
+
+`company_type` is intentionally not a large closed enum because no authoritative product taxonomy exists yet. The bounded identifier prevents unlimited free text without freezing an invented taxonomy.
+
+Unknown JSON fields are rejected. Command bodies are bounded to 16 KiB. Equivalent normalized retries are idempotent and do not perform another row update.
+
+## Verification request boundary
+
+`POST /api/v1/organizations/current/verification` is the customer-side request boundary only. It requires local `organization.verify.request` and accepts no target state.
+
+Allowed behavior:
+
+```text
+unverified -> pending
+rejected   -> pending
+pending    -> pending   # idempotent success
+```
+
+A verified organization cannot request another transition under the current policy and receives a stable conflict. This endpoint never performs:
+
+```text
+pending -> verified
+pending -> rejected
+```
+
+The same endpoint can return `409 organization_not_ready` during Clerk/local projection lag. That conflict includes `Retry-After: 2`; `verification_transition_not_allowed` does not emit `Retry-After`.
+
+Manual approval/rejection remains blocked on a separate platform-admin authorization prerequisite.
+
+## Concurrency and transaction boundary
+
+Authenticated command flow is deliberately split:
+
+1. verify Clerk JWT and active organization context;
+2. call private Identity `/me` and resolve active local membership/permissions;
+3. only then begin a short Organization PostgreSQL transaction;
+4. `SELECT ... FOR UPDATE` the local organization row;
+5. re-check provider lifecycle and current BridgeWorks state;
+6. apply the local mutation;
+7. commit.
+
+No Identity or Clerk network call occurs inside the PostgreSQL transaction.
+
+The row lock prevents lost product-profile updates and makes verification transition checks atomic. PATCH merges omitted fields against the freshly locked row. Verification never performs an unlocked read followed by a later state update.
+
+Webhook reconciliation and command mutation can run concurrently. PostgreSQL row locking serializes writes to the same organization row, while webhook projection SQL remains restricted to provider-owned columns. Therefore a later `organization.updated` event can change provider name/slug without overwriting BridgeWorks product fields, verification state, trust state, or local application role.
+
+## Stable onboarding read model
+
+No extra `onboarding_status` column is introduced. The existing authenticated read model is sufficient and avoids a second derived state machine:
+
+- `GET /api/v1/organizations/current` returns product fields plus `verification_status` and `trust_status`;
+- `GET /api/v1/organizations/current/membership` returns local application role and permissions;
+- `organization_not_ready` represents provider/local synchronization lag.
+
+UI onboarding progress can be derived from these authoritative fields without persisting another independently mutable status.
 
 ## Organization product domain
 
-The provider/application lifecycle remains separate and unchanged:
+Provider/application lifecycle remains:
 
 ```text
 pending | active | disabled | deleted
 ```
 
-BridgeWorks company verification uses a separate lifecycle:
+BridgeWorks verification remains separate:
 
 ```text
 unverified | pending | verified | rejected
 ```
 
-Allowed verification transitions in the current domain policy are:
+The complete domain policy still permits `pending -> verified|rejected`, but PR 2 exposes only the customer-side request transitions. Operator transitions need a reviewed platform-admin boundary.
 
-```text
-unverified -> pending
-pending    -> verified
-pending    -> rejected
-rejected   -> pending
-```
-
-Idempotent same-state writes are valid. `verified` has no outgoing transition in PR 1 because the current product contract does not yet define revocation or re-verification semantics. A later command implementation must not invent such a transition silently.
-
-`trust_status` is also separate from provider lifecycle and company verification. The only currently defined trust state is:
+`trust_status` remains independent and currently supports only:
 
 ```text
 unassessed
 ```
 
-Additional values such as trusted, restricted, or suspended are intentionally not guessed. A reviewed trust/fraud policy must define their meaning and transitions before persistence accepts them.
-
-Existing production rows migrate deterministically to:
-
-```text
-verification_status = unverified
-trust_status        = unassessed
-```
-
-`legal_name`, `website`, `country`, and `company_type` remain nullable for existing rows and reject non-null blank values. PR 1 does not guess URL normalization, ISO country-code policy, or a closed `company_type` taxonomy because those are command-validation/product-contract decisions.
-
-No new indexes are added for these fields because PR 1 introduces no filtering or lookup query that would use them.
+PR 2 exposes no trust mutation.
 
 ## Local roles and permissions
 
-The application role catalog is:
+Roles:
 
 ```text
 owner
@@ -155,8 +316,6 @@ recruiter
 delivery_manager
 viewer
 ```
-
-The least-privilege matrix for the currently known capabilities is:
 
 | Permission | owner | admin | recruiter | delivery_manager | viewer |
 | --- | --- | --- | --- | --- | --- |
@@ -168,106 +327,59 @@ The least-privilege matrix for the currently known capabilities is:
 | `membership.manage` | yes | yes | no | no | no |
 | `membership.role.manage` | yes | yes | no | no | no |
 
-The conservative recruiter and delivery-manager grants are intentional. Their future mutation capabilities should be added only with concrete product use cases and authorization tests rather than inferred from role names.
+PR 2 does not implement general role mutation, last-owner/self-demotion/leave rules, or invitations.
 
-Existing `admin` and `viewer` memberships are not rewritten. `admin` retains its original permissions and gains the explicit administration permissions required by the expanded catalog; `viewer` retains read-only access. Existing organizations are not backfilled with an `owner`, because selecting an owner from existing memberships would be an unsupported authorization guess.
+## Synchronization transaction and ordering model
 
-Owner invariants such as “at least one owner”, self-demotion, last-owner leave/delete, and concurrent owner changes belong to the later role-mutation command boundary and are not pretended to be enforced by the role catalog alone.
+`organizationsync.Service` preserves the established use case:
 
-## Transaction and ordering model
-
-`organizationsync.Service` owns the complete synchronization use case:
-
-1. begin the unit of work;
-2. insert the transactional inbox row;
+1. begin transaction;
+2. insert transactional inbox row;
 3. commit duplicates before advisory locking;
-4. acquire an organization-scoped transaction advisory lock;
-5. load the latest competing event for the exact aggregate;
+4. acquire organization-scoped transaction advisory lock;
+5. load latest competing event for the exact aggregate;
 6. classify stale events by timestamp, delete > update > create, then lexical event ID;
-7. decide organization or membership transitions;
-8. generate UUIDv7 identifiers;
-9. commit only after the projection mutation succeeds.
+7. apply provider projection and, for eligible post-v3 organizations only, either perform the one-time exact-creator owner bootstrap or permanently cancel its eligibility when deleted creator membership history exists;
+8. commit only after all projection work succeeds.
 
-The PostgreSQL adapter exposes only narrow sqlc-backed persistence operations and transaction control. It does not decide status transitions, event precedence, role initialization, deleted-entity reactivation, or UUID generation.
-
-Membership inserts run inside the transaction savepoint:
-
-```text
-SAVEPOINT membership_insert
-```
-
-A failed insert is followed by `ROLLBACK TO SAVEPOINT membership_insert` and `RELEASE SAVEPOINT membership_insert` before any follow-up read. Only these exact unique constraints have recoverable conflict logic:
-
-```text
-memberships_clerk_membership_id_uq
-memberships_active_organization_user_uq
-```
-
-Any other `23505` remains an operational error and rolls back the outer transaction and inbox row.
-
-## Provider lifecycle semantics
-
-Organizations use:
-
-```text
-pending | active | disabled | deleted
-```
-
-- Membership-first delivery creates a `pending` organization placeholder.
-- Organization create/update promotes `pending` to `active`.
-- Provider updates preserve locally `disabled` organizations.
-- Deleted organizations never restore from later create/update events.
-- Delete events create tombstones when the projection is absent.
-
-Memberships use:
-
-```text
-active | deleted
-```
-
-- Deleted membership rows never reactivate.
-- Rejoin requires a new Clerk membership ID.
-- Only one active membership may exist for an organization/user pair.
-- A competing active membership ID is retryable; the losing transaction and inbox insertion roll back.
+Membership inserts retain the `SAVEPOINT membership_insert` boundary. Only `memberships_clerk_membership_id_uq` and `memberships_active_organization_user_uq` have explicit conflict recovery; unrelated unique violations still roll back the transaction and inbox insertion.
 
 ## Authorization flow
 
-For authenticated current-organization requests:
+For authenticated APIs:
 
-1. verify the Bearer token with the Clerk SDK;
-2. require the verified active organization claim;
+1. verify Bearer token with Clerk SDK;
+2. require verified active organization claim;
 3. call Identity `/me` over the private service network;
-4. require an active local Identity account;
-5. resolve the local organization projection and provider lifecycle status;
-6. load the active membership by local organization ID and verified Clerk user ID;
-7. load local effective permissions from `application_role`;
-8. construct an immutable `ActorContext`;
+4. require active local Identity account;
+5. resolve local organization lifecycle;
+6. resolve active membership using local organization ID + verified Clerk user ID;
+7. load permissions from local `application_role`;
+8. construct immutable `ActorContext`;
 9. authorize the endpoint.
 
-The Identity call occurs outside Organization PostgreSQL transactions. Identity outage does not fail Organization readiness and does not stop webhook processing.
+The Identity call uses the Clerk token in `Authorization`. In Cloud Run, Organization separately obtains a Google ID token and sends it through `X-Serverless-Authorization`. No service-account JSON key is used.
 
-Authenticated responses use:
+Authenticated responses retain:
 
 ```http
 Cache-Control: no-store
 Vary: Authorization
 ```
 
-Unauthorized responses use:
-
-```http
-WWW-Authenticate: Bearer realm="bridgeworks"
-```
+Gateway CORS may append `Origin`. Request IDs are generated/preserved through `X-Request-Id`.
 
 ## Platform-admin prerequisite
 
-Manual company verification requires platform-level administrator authority. No reusable platform-admin authentication/authorization contract was identified in the current files and public contracts inspected for this work.
+Manual company verification still requires platform-level administrator authority. No reusable platform-admin authentication/authorization contract exists in current `main`.
 
-PR 1 therefore persists only the verification domain model and exposes no operator mutation endpoint. A future manual-verification PR must first establish or reuse a reviewed platform-admin boundary; it must not use an environment email allowlist, hidden header, unauthenticated endpoint, or client-supplied role.
+PR 2 therefore implements only customer verification requests. A later PR must first establish/reuse a reviewed platform-admin boundary and must not use an environment email allowlist, hidden header, client-supplied role, or unauthenticated operator endpoint.
+
+Business-email verification also remains deferred until an authoritative verified-email signal is available through an approved Identity/Clerk public contract. Organization Service must not query Identity tables directly.
 
 ## Local commands
 
-From the repository root:
+From repository root:
 
 ```bash
 cp .env.example .env
@@ -289,27 +401,32 @@ golangci-lint run ./...
 go tool cover -func=coverage.out
 ```
 
-The CI integration suite runs signed Clerk webhook synchronization, transactional conflict/concurrency regressions, the real PostgreSQL v1-to-v2 domain migration regression, current-organization authorization, CORS/cache/security contracts, dependency outage/recovery, migration idempotency, and private-port isolation.
+Organization CI also runs real PostgreSQL migration upgrades, including v2 legacy admin/viewer rows and the post-v3 eligibility default; a signed Clerk regression against that same migrated legacy row; both successful organization-first and membership-first owner-bootstrap orderings; creator deleted-history cancellation and fresh-membership rejoin no-owner regression; lifecycle/one-time-fence checks; APISIX onboarding ownership regression; duplicate/stale handling; membership conflict/concurrency/savepoint regressions; projection-ownership checks; unrelated-unique rollback; dependency outage/recovery; and private-port isolation.
 
-## Explicit non-goals for PR 1
+## PR 2 non-goals
 
-This PR does not add Redis, cache implementation, OpenTelemetry, `pg_cron`, a retention goroutine, an APISIX rate-limit plugin, organization-create commands, business-email verification commands, manual-verification commands, invitation commands, role-mutation APIs, trust mutation, a platform-admin endpoint, RabbitMQ, an outbox, an audit framework, or new public endpoints.
+Not implemented here:
+
+- Organization-to-Clerk Backend API creation;
+- platform-admin authentication;
+- manual company approval/rejection;
+- business-email verification;
+- invitation lifecycle;
+- general member role mutation;
+- last-owner mutation rules;
+- audit framework;
+- trust-status mutation;
+- Talent/Profile/Passport/Hiring Intent;
+- frontend changes;
+- production deployment.
 
 ## Production operations
 
-Cross-service capacity, traffic protection, observability, cache, and retention work is tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate the configured Clerk verification key with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
+Cross-service production work remains tracked in the [production-readiness roadmap](../../docs/production-readiness-roadmap.md). Rotate Clerk verification keys with the [Clerk JWT key-rotation runbook](../../docs/runbooks/clerk-jwt-key-rotation.md).
 
-## Private metrics and access logs
+Organization Service starts a private metrics listener configured by `ORGANIZATION_METRICS_ADDR`. It exposes only `GET /metrics`, is not routed through APISIX, and is independent of readiness.
 
-Organization Service starts a second operational HTTP listener configured by:
-
-```dotenv
-ORGANIZATION_METRICS_ADDR=:9090
-```
-
-The address must be a non-empty `host:port`, must not include a URL scheme, and must differ from `HTTP_ADDR`. Bind failure stops startup. The listener exposes only `GET /metrics`, is gracefully shut down, is private to the service network, and is not routed through APISIX. Prometheus absence or scrape failure does not affect `/health/ready`, webhook synchronization, or authenticated requests.
-
-Organization metrics use a service-owned Prometheus registry and bounded labels:
+Bounded metrics remain:
 
 ```text
 http_requests_total{service,route,method,status_class}
@@ -319,16 +436,6 @@ clerk_webhook_events_total{service,aggregate,outcome}
 database_pool_*{service,pool="runtime"}
 ```
 
-Webhook aggregate values are `organization` and `membership`. Outcomes are `processed`, `duplicate`, `stale`, `rejected`, and `retryable_failure`. Processed, duplicate, and stale outcomes come from the application-owned Unit of Work after its commit decision; the HTTP layer does not infer persistence semantics from status codes.
+HTTP method labels are bounded to `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`; arbitrary methods map to `OTHER`. Access logs keep the actual method but exclude raw paths/query strings and sensitive values.
 
-Every completed application request emits one structured access record containing `service`, `request_id`, `method`, matched chi `route`, `status`, `duration_ms`, and `response_bytes`. Unmatched routes use `unknown`; raw URL paths and query strings are never fallback labels or log fields. Health completion records are written only at debug level; with the normal info threshold they are intentionally absent.
-
-Access logs and metrics exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers, email addresses, Clerk user, organization, or membership IDs, local UUIDs, database URLs, request or response bodies, request IDs as metric labels, and raw dependency errors.
-
-Pool defaults remain unchanged until measured load tests establish throughput, latency, replica count, connection wait, and the total Organization PostgreSQL connection budget. OpenTelemetry tracing, APISIX rate limiting, caching, and inbox retention remain separate work.
-
-### Telemetry guarantees
-
-The production Clerk webhook route depends on `ProcessWithResult(context.Context, organizationsync.Event) (organizationsync.Result, error)` at compile time. There is no runtime type assertion, fallback to `Process`, or default `processed` outcome. Organization webhook metrics accept only `aggregate=organization|membership`.
-
-HTTP metric method labels use the bounded values `GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE|OTHER`; arbitrary methods map to `OTHER`. Access logs retain the actual request method. Pool metrics are collected from `pgxpool.Stat()` at scrape time without database queries or silent panic recovery. Shutdown stops metrics serving before closing PostgreSQL. Health completion records are debug-only and are absent at the normal info log threshold.
+Access logs and metrics exclude Authorization, cookies, JWTs, webhook bodies, Svix headers, email addresses, Clerk user/organization/membership IDs, local UUIDs, database URLs, request/response bodies, secrets, and raw dependency errors. Metrics stay low-cardinality.

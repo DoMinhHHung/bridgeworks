@@ -12,6 +12,15 @@ WHERE organization_id = $1
   AND clerk_user_id = $2
   AND status = 'active';
 
+-- name: HasDeletedMembershipByOrganizationUser :one
+SELECT EXISTS (
+    SELECT 1
+    FROM organization.memberships
+    WHERE organization_id = $1
+      AND clerk_user_id = $2
+      AND status = 'deleted'
+);
+
 -- name: InsertMembership :one
 INSERT INTO organization.memberships (
     id, clerk_membership_id, organization_id, clerk_user_id,
@@ -24,6 +33,14 @@ RETURNING id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
 UPDATE organization.memberships
 SET clerk_role = $2
 WHERE clerk_membership_id = $1
+  AND status = 'active'
+RETURNING id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
+          application_role, status, created_at, updated_at;
+
+-- name: UpdateMembershipApplicationRole :one
+UPDATE organization.memberships
+SET application_role = $2
+WHERE id = $1
   AND status = 'active'
 RETURNING id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
           application_role, status, created_at, updated_at;
