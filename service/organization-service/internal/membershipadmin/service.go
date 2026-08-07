@@ -642,7 +642,7 @@ func normalizeInvitationEmail(raw string) (string, error) {
 			if r > unicode.MaxASCII || (r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9')) {
 				return "", ErrInvalidEmail
 			}
-	}
+		}
 	}
 	return local + "@" + domain, nil
 }
