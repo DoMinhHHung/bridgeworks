@@ -369,13 +369,14 @@ func currentOrganizationFromRow(row sqlcgen.OrganizationOrganization) currentorg
 
 func organizationFromRow(row sqlcgen.OrganizationOrganization) organizationsync.Organization {
 	return organizationsync.Organization{
-		ID:                   row.ID,
-		ClerkOrganizationID:  row.ClerkOrganizationID,
-		Name:                 row.Name,
-		Slug:                 row.Slug,
-		Status:               row.Status,
-		ClerkCreatedByUserID: row.ClerkCreatedByUserID,
-		OwnerBootstrapped:    row.OwnerBootstrapped,
+		ID:                     row.ID,
+		ClerkOrganizationID:    row.ClerkOrganizationID,
+		Name:                   row.Name,
+		Slug:                   row.Slug,
+		Status:                 row.Status,
+		ClerkCreatedByUserID:   row.ClerkCreatedByUserID,
+		OwnerBootstrapped:      row.OwnerBootstrapped,
+		OwnerBootstrapEligible: row.OwnerBootstrapEligible,
 	}
 }
 
