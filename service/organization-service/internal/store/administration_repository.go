@@ -59,6 +59,7 @@ func (u *businessVerificationUnitOfWork) LockMembership(
 		OrganizationID:  row.OrganizationID,
 		ApplicationRole: row.ApplicationRole,
 		Status:          row.Status,
+		RemovalPending:  row.RemovalPending,
 	}, true, nil
 }
 
