@@ -37,10 +37,14 @@ func New(secretKey, rawURL string, timeout time.Duration) (*Client, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return nil, errors.New("Clerk Backend API URL scheme must be HTTP or HTTPS")
 	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return nil, errors.New("Clerk Backend API URL must be an origin")
+	}
 	if timeout <= 0 || timeout > 5*time.Second {
 		return nil, errors.New("Clerk Backend API timeout must be between zero and five seconds")
 	}
-	baseURL := strings.TrimRight(parsed.String(), "/")
+	parsed.Path = ""
+	baseURL := strings.TrimRight(parsed.String(), "/") + "/v1"
 	transport := &http.Transport{
 		// The Clerk secret must never be redirected through ambient proxy state.
 		Proxy: nil,
