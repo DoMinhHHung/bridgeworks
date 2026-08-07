@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	RolePlatformAdmin                         = "platform_admin"
+	RolePlatformAdmin                        = "platform_admin"
 	PermissionOrganizationVerificationReview = "organization.verification.review"
 )
 
