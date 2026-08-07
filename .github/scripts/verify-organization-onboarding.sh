@@ -137,8 +137,9 @@ JSON
 test "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_org_onboarding_deleted "${work}/deleted-organization.json" "${work}/deleted-organization-response" onboarding-deleted-organization)" = "204|onboarding-deleted-organization"
 test "$(organization_sql "select o.status, coalesce(o.clerk_created_by_user_id, ''), o.owner_bootstrap_eligible, o.owner_bootstrapped, m.application_role from organization.organizations o join organization.memberships m on m.organization_id=o.id and m.clerk_membership_id='mem_onboarding_deleted' where o.clerk_organization_id='org_onboarding_deleted'")" = "deleted||t|f|admin"
 
-# Historical creator metadata alone is insufficient: the exact creator must
-# currently have an active projected membership.
+# Deleted creator membership history permanently cancels automatic initial-owner
+# eligibility. A later rejoin with a fresh Clerk membership ID must initialize
+# normally and must never revive the historical creator privilege.
 cat > "${work}/inactive-membership-created.json" <<'JSON'
 {"type":"organizationMembership.created","timestamp":1785745500000,"data":{"id":"mem_onboarding_inactive","organization":{"id":"org_onboarding_inactive"},"public_user_data":{"user_id":"user_onboarding_inactive"},"role":"org:admin"}}
 JSON
@@ -151,7 +152,13 @@ cat > "${work}/inactive-organization.json" <<'JSON'
 {"type":"organization.created","timestamp":1785745520000,"data":{"id":"org_onboarding_inactive","name":"Inactive Creator Organization","slug":"inactive-creator-organization","created_by":"user_onboarding_inactive"}}
 JSON
 test "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_org_onboarding_inactive "${work}/inactive-organization.json" "${work}/inactive-organization-response" onboarding-inactive-organization)" = "204|onboarding-inactive-organization"
-test "$(organization_sql "select o.status, coalesce(o.clerk_created_by_user_id, ''), o.owner_bootstrap_eligible, o.owner_bootstrapped, m.status, m.application_role from organization.organizations o join organization.memberships m on m.organization_id=o.id and m.clerk_membership_id='mem_onboarding_inactive' where o.clerk_organization_id='org_onboarding_inactive'")" = "active|user_onboarding_inactive|t|f|deleted|admin"
+test "$(organization_sql "select o.status, coalesce(o.clerk_created_by_user_id, ''), o.owner_bootstrap_eligible, o.owner_bootstrapped, m.status, m.application_role, (select count(*) from organization.memberships owners where owners.organization_id=o.id and owners.application_role='owner') from organization.organizations o join organization.memberships m on m.organization_id=o.id and m.clerk_membership_id='mem_onboarding_inactive' where o.clerk_organization_id='org_onboarding_inactive'")" = "active|user_onboarding_inactive|f|f|deleted|admin|0"
+
+cat > "${work}/inactive-membership-rejoin.json" <<'JSON'
+{"type":"organizationMembership.created","timestamp":1785745530000,"data":{"id":"mem_onboarding_inactive_rejoin","organization":{"id":"org_onboarding_inactive"},"public_user_data":{"user_id":"user_onboarding_inactive"},"role":"org:member"}}
+JSON
+test "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_mem_onboarding_inactive_rejoin "${work}/inactive-membership-rejoin.json" "${work}/inactive-membership-rejoin-response" onboarding-inactive-membership-rejoin)" = "204|onboarding-inactive-membership-rejoin"
+test "$(organization_sql "select rejoin.application_role, o.owner_bootstrap_eligible, o.owner_bootstrapped, (select count(*) from organization.memberships owners where owners.organization_id=o.id and owners.application_role='owner') from organization.organizations o join organization.memberships rejoin on rejoin.organization_id=o.id and rejoin.clerk_membership_id='mem_onboarding_inactive_rejoin' where o.clerk_organization_id='org_onboarding_inactive'")" = "viewer|f|f|0"
 
 sign_token user_onboarding_ci sess_onboarding_ci org_onboarding_ci "${auth_work}/organization-onboarding.token"
 
@@ -260,7 +267,7 @@ for forbidden in [
     'user_onboarding_membership_first', 'org_onboarding_membership_first', 'mem_onboarding_membership_first',
     'user_onboarding_disabled', 'org_onboarding_disabled', 'mem_onboarding_disabled',
     'user_onboarding_deleted', 'org_onboarding_deleted', 'mem_onboarding_deleted',
-    'user_onboarding_inactive', 'org_onboarding_inactive', 'mem_onboarding_inactive',
+    'user_onboarding_inactive', 'org_onboarding_inactive', 'mem_onboarding_inactive', 'mem_onboarding_inactive_rejoin',
     'onboarding-ci@example.test', 'Concurrent BridgeWorks Legal Name',
     'svix-signature', 'postgres://',
 ]:
