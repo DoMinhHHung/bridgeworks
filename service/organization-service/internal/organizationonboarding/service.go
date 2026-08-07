@@ -6,6 +6,7 @@ import (
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authorization"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/currentorganization"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationaudit"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationdomain"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform/safeerr"
 	"github.com/google/uuid"
@@ -17,6 +18,7 @@ type UnitOfWork interface {
 	LockOrganization(context.Context, uuid.UUID) (currentorganization.Organization, bool, error)
 	UpdateProductProfile(context.Context, uuid.UUID, *string, *string, *string, *string) (currentorganization.Organization, error)
 	UpdateVerificationStatus(context.Context, uuid.UUID, string) (currentorganization.Organization, error)
+	InsertAuditEvent(context.Context, organizationaudit.Event) error
 	Commit(context.Context) error
 	Rollback(context.Context) error
 }
@@ -94,6 +96,21 @@ func (s *Service) UpdateProfile(
 	if err != nil {
 		return currentorganization.Organization{}, safeerr.Wrap("update organization product profile", err)
 	}
+	event, err := organizationaudit.TenantEvent(
+		actor.OrganizationID,
+		organizationaudit.EventOrganizationProfileUpdated,
+		actor.IdentityUserID,
+		actor.MembershipID,
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return currentorganization.Organization{}, safeerr.Wrap("create organization profile audit event", err)
+	}
+	if err := uow.InsertAuditEvent(ctx, event); err != nil {
+		return currentorganization.Organization{}, safeerr.Wrap("append organization profile audit event", err)
+	}
 	if err := uow.Commit(ctx); err != nil {
 		return currentorganization.Organization{}, safeerr.Wrap("commit organization product profile", err)
 	}
@@ -145,6 +162,7 @@ func (s *Service) RequestVerification(
 		return currentorganization.Organization{}, ErrVerificationTransitionNotAllowed
 	}
 
+	previousStatus := organization.VerificationStatus
 	organization, err = uow.UpdateVerificationStatus(
 		ctx,
 		actor.OrganizationID,
@@ -152,6 +170,22 @@ func (s *Service) RequestVerification(
 	)
 	if err != nil {
 		return currentorganization.Organization{}, safeerr.Wrap("request organization verification", err)
+	}
+	pendingStatus := organizationdomain.VerificationStatusPending
+	event, err := organizationaudit.TenantEvent(
+		actor.OrganizationID,
+		organizationaudit.EventOrganizationVerificationRequested,
+		actor.IdentityUserID,
+		actor.MembershipID,
+		nil,
+		&previousStatus,
+		&pendingStatus,
+	)
+	if err != nil {
+		return currentorganization.Organization{}, safeerr.Wrap("create verification request audit event", err)
+	}
+	if err := uow.InsertAuditEvent(ctx, event); err != nil {
+		return currentorganization.Organization{}, safeerr.Wrap("append verification request audit event", err)
 	}
 	if err := uow.Commit(ctx); err != nil {
 		return currentorganization.Organization{}, safeerr.Wrap("commit organization verification request", err)
