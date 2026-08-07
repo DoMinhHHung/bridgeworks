@@ -136,9 +136,9 @@ func TestOwnerBootstrapRequiresActiveOrganization(t *testing.T) {
 			uow := newFakeUnitOfWork()
 			uow.organizationFound = true
 			uow.organization = Organization{
-				ID: testOrganizationID,
-				Status: status,
-				ClerkCreatedByUserID: &creator,
+				ID:                     testOrganizationID,
+				Status:                 status,
+				ClerkCreatedByUserID:   &creator,
 				OwnerBootstrapEligible: true,
 			}
 			uow.activeFound = true
@@ -166,9 +166,9 @@ func TestOwnerBootstrapRequiresActiveCreatorMembership(t *testing.T) {
 	uow := newFakeUnitOfWork()
 	uow.organizationFound = true
 	uow.organization = Organization{
-		ID: testOrganizationID,
-		Status: "active",
-		ClerkCreatedByUserID: &creator,
+		ID:                     testOrganizationID,
+		Status:                 "active",
+		ClerkCreatedByUserID:   &creator,
 		OwnerBootstrapEligible: true,
 	}
 	uow.membershipFound = true
@@ -192,10 +192,10 @@ func TestOwnerBootstrapOneTimeFenceDoesNotRegrantRole(t *testing.T) {
 	uow := newFakeUnitOfWork()
 	uow.organizationFound = true
 	uow.organization = Organization{
-		ID: testOrganizationID,
-		Status: "active",
-		ClerkCreatedByUserID: &creator,
-		OwnerBootstrapped: true,
+		ID:                     testOrganizationID,
+		Status:                 "active",
+		ClerkCreatedByUserID:   &creator,
+		OwnerBootstrapped:      true,
 		OwnerBootstrapEligible: true,
 	}
 	uow.activeFound = true
@@ -242,7 +242,9 @@ func TestOwnerBootstrapRejectsCreatorMismatch(t *testing.T) {
 	uow := newFakeUnitOfWork()
 	uow.organizationFound = true
 	uow.organization = Organization{
-		ID: testOrganizationID, Status: "active", ClerkCreatedByUserID: &storedCreator,
+		ID:                     testOrganizationID,
+		Status:                 "active",
+		ClerkCreatedByUserID:   &storedCreator,
 		OwnerBootstrapEligible: true,
 	}
 	service := New(fakeFactory{uow: uow}, &fakeGenerator{})
