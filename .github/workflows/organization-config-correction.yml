@@ -1,0 +1,49 @@
+name: Organization Config Correction
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  correct-clerk-origin:
+    if: github.event.pull_request.head.ref == 'feat/organization-membership-administration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/organization-membership-administration
+          fetch-depth: 0
+      - name: Replace Clerk Backend API base path with origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          replacements = {
+              Path('service/organization-service/internal/config/config.go'): (
+                  'defaultClerkBackendAPIURL            = "https://api.clerk.com/v1"',
+                  'defaultClerkBackendAPIURL            = "https://api.clerk.com"',
+              ),
+              Path('.env.example'): (
+                  'CLERK_BACKEND_API_URL=https://api.clerk.com/v1',
+                  'CLERK_BACKEND_API_URL=https://api.clerk.com',
+              ),
+              Path('service/organization-service/.env.example'): (
+                  'CLERK_BACKEND_API_URL=https://api.clerk.com/v1',
+                  'CLERK_BACKEND_API_URL=https://api.clerk.com',
+              ),
+          }
+          for path, (old, new) in replacements.items():
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f'expected text not found in {path}')
+              path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add service/organization-service/internal/config/config.go .env.example service/organization-service/.env.example
+          git commit -m 'fix(organization): configure Clerk backend origin'
+          git push origin HEAD:feat/organization-membership-administration
