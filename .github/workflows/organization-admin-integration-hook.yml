@@ -1,0 +1,39 @@
+name: Organization Admin Integration Hook
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  hook-administration-integration:
+    if: github.event.pull_request.head.ref == 'feat/organization-membership-administration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/organization-membership-administration
+          fetch-depth: 0
+      - name: Append administration integration to Organization onboarding verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/verify-organization-onboarding.sh')
+          text = path.read_text()
+          old = 'echo "Organization onboarding ownership integration tests passed."'
+          new = 'bash .github/scripts/verify-organization-membership-administration.sh\n\n' + old
+          if new in text:
+              raise SystemExit('administration integration already hooked')
+          if old not in text:
+              raise SystemExit('onboarding success marker not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/scripts/verify-organization-onboarding.sh
+          git commit -m 'test(organization): run administration integration'
+          git push origin HEAD:feat/organization-membership-administration
