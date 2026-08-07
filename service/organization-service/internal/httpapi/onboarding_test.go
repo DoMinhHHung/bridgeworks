@@ -64,8 +64,7 @@ func TestPatchCurrentOrganizationUsesResolvedLocalActor(t *testing.T) {
 		VerificationStatus: "unverified", TrustStatus: "unassessed",
 	}}
 
-	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader(`{"legal_name":" BridgeWorks Ltd ","country":"vn"}`))
-	request.Body = ioNopCloserString(`{"legal_name":" BridgeWorks Ltd ","country":"vn"}`)
+	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader("{\"legal_name\":\" BridgeWorks Ltd \",\"country\":\"vn\"}"))
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -94,8 +93,7 @@ func TestPatchCurrentOrganizationRejectsUnknownFieldsBeforeMutation(t *testing.T
 	actor := authorization.NewActorContext(uuid.New(), organizationID, uuid.New(), "admin", []string{authorization.PermissionOrganizationManage})
 	resolver := onboardingResolverStub{result: currentorganization.Result{Actor: actor}}
 	stub := &onboardingStub{}
-	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", nil)
-	request.Body = ioNopCloserString(`{"verification_status":"verified"}`)
+	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader("{\"verification_status\":\"verified\"}"))
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -105,7 +103,7 @@ func TestPatchCurrentOrganizationRejectsUnknownFieldsBeforeMutation(t *testing.T
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), `"code":"invalid_request"`) {
+	if !strings.Contains(recorder.Body.String(), "\"code\":\"invalid_request\"") {
 		t.Fatalf("body = %s", recorder.Body.String())
 	}
 	if stub.profileActor.OrganizationID != uuid.Nil {
@@ -118,8 +116,7 @@ func TestRequestVerificationMapsTransitionConflict(t *testing.T) {
 	actor := authorization.NewActorContext(uuid.New(), organizationID, uuid.New(), "owner", []string{authorization.PermissionOrganizationVerifyRequest})
 	resolver := onboardingResolverStub{result: currentorganization.Result{Actor: actor}}
 	stub := &onboardingStub{verifyErr: organizationonboarding.ErrVerificationTransitionNotAllowed}
-	request := httptest.NewRequest(http.MethodPost, "/organizations/current/verification", nil)
-	request.Body = ioNopCloserString(`{}`)
+	request := httptest.NewRequest(http.MethodPost, "/organizations/current/verification", strings.NewReader("{}"))
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -129,7 +126,7 @@ func TestRequestVerificationMapsTransitionConflict(t *testing.T) {
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), `"code":"verification_transition_not_allowed"`) {
+	if !strings.Contains(recorder.Body.String(), "\"code\":\"verification_transition_not_allowed\"") {
 		t.Fatalf("body = %s", recorder.Body.String())
 	}
 }
@@ -137,8 +134,7 @@ func TestRequestVerificationMapsTransitionConflict(t *testing.T) {
 func TestPatchCurrentOrganizationPreservesNotReadyContract(t *testing.T) {
 	resolver := onboardingResolverStub{err: currentorganization.ErrOrganizationNotReady}
 	stub := &onboardingStub{}
-	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", nil)
-	request.Body = ioNopCloserString(`{"country":"VN"}`)
+	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", strings.NewReader("{\"country\":\"VN\"}"))
 	request = request.WithContext(authn.ContextWithPrincipal(request.Context(), authorization.Principal{
 		ClerkUserID: "verified-user", SessionID: "verified-session", ClerkOrganizationID: "verified-org",
 	}))
@@ -151,7 +147,7 @@ func TestPatchCurrentOrganizationPreservesNotReadyContract(t *testing.T) {
 	if recorder.Header().Get("Retry-After") != "2" {
 		t.Fatalf("Retry-After = %q", recorder.Header().Get("Retry-After"))
 	}
-	if !strings.Contains(recorder.Body.String(), `"code":"organization_not_ready"`) {
+	if !strings.Contains(recorder.Body.String(), "\"code\":\"organization_not_ready\"") {
 		t.Fatalf("body = %s", recorder.Body.String())
 	}
 }
@@ -160,7 +156,7 @@ func TestOnboardingErrorDelegatesPermissionDenied(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPatch, "/organizations/current", nil)
 	recorder := httptest.NewRecorder()
 	writeOnboardingError(recorder, request, currentorganization.ErrPermissionDenied)
-	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), `"code":"permission_denied"`) {
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "\"code\":\"permission_denied\"") {
 		t.Fatalf("status/body = %d/%s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -176,11 +172,3 @@ func TestOnboardingErrorDoesNotExposeRawErrors(t *testing.T) {
 		t.Fatalf("raw error leaked: %s", recorder.Body.String())
 	}
 }
-
-func ioNopCloserString(value string) *readCloser {
-	return &readCloser{Reader: strings.NewReader(strings.ReplaceAll(value, `\"`, `"`))}
-}
-
-type readCloser struct{ *strings.Reader }
-
-func (r *readCloser) Close() error { return nil }
