@@ -66,6 +66,27 @@ func (q *Queries) GetMembershipByClerkID(ctx context.Context, clerkMembershipID 
 	return i, err
 }
 
+const hasMembershipByOrganizationUser = `-- name: HasMembershipByOrganizationUser :one
+SELECT EXISTS (
+    SELECT 1
+    FROM organization.memberships
+    WHERE organization_id = $1
+      AND clerk_user_id = $2
+)
+`
+
+type HasMembershipByOrganizationUserParams struct {
+	OrganizationID uuid.UUID
+	ClerkUserID    string
+}
+
+func (q *Queries) HasMembershipByOrganizationUser(ctx context.Context, arg HasMembershipByOrganizationUserParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasMembershipByOrganizationUser, arg.OrganizationID, arg.ClerkUserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertMembership = `-- name: InsertMembership :one
 INSERT INTO organization.memberships (
     id, clerk_membership_id, organization_id, clerk_user_id,
@@ -125,11 +146,11 @@ func (q *Queries) ListPermissionsForRole(ctx context.Context, roleKey string) ([
 	defer rows.Close()
 	var items []string
 	for rows.Next() {
-		var permission_key string
-		if err := rows.Scan(&permission_key); err != nil {
+		var permissionKey string
+		if err := rows.Scan(&permissionKey); err != nil {
 			return nil, err
 		}
-		items = append(items, permission_key)
+		items = append(items, permissionKey)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -147,6 +168,37 @@ RETURNING id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
 
 func (q *Queries) MarkMembershipDeleted(ctx context.Context, clerkMembershipID string) (OrganizationMembership, error) {
 	row := q.db.QueryRow(ctx, markMembershipDeleted, clerkMembershipID)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.ClerkMembershipID,
+		&i.OrganizationID,
+		&i.ClerkUserID,
+		&i.ClerkRole,
+		&i.ApplicationRole,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateMembershipApplicationRole = `-- name: UpdateMembershipApplicationRole :one
+UPDATE organization.memberships
+SET application_role = $2
+WHERE id = $1
+  AND status = 'active'
+RETURNING id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
+          application_role, status, created_at, updated_at
+`
+
+type UpdateMembershipApplicationRoleParams struct {
+	ID              uuid.UUID
+	ApplicationRole string
+}
+
+func (q *Queries) UpdateMembershipApplicationRole(ctx context.Context, arg UpdateMembershipApplicationRoleParams) (OrganizationMembership, error) {
+	row := q.db.QueryRow(ctx, updateMembershipApplicationRole, arg.ID, arg.ApplicationRole)
 	var i OrganizationMembership
 	err := row.Scan(
 		&i.ID,
