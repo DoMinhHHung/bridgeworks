@@ -32,6 +32,9 @@ SELECT id,
        updated_at,
        requested_at
 FROM pending
-WHERE (requested_at, id) > ($1::timestamptz, $2::uuid)
+WHERE (requested_at, id) > (
+    sqlc.arg(after_time)::timestamptz,
+    sqlc.arg(after_id)::uuid
+)
 ORDER BY requested_at ASC, id ASC
-LIMIT $3;
+LIMIT sqlc.arg(result_limit);
