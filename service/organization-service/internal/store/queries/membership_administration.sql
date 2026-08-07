@@ -68,6 +68,20 @@ WHERE organization_id = $1
   AND status = 'active';
 
 -- name: InsertMembershipRemovalIntent :one
+WITH target AS (
+    SELECT clerk_user_id
+    FROM organization.memberships
+    WHERE id = $1
+      AND organization_id = $2
+), cancelled_bootstrap AS (
+    UPDATE organization.organizations o
+    SET owner_bootstrap_eligible = false
+    FROM target t
+    WHERE o.id = $2
+      AND o.owner_bootstrap_eligible = true
+      AND o.owner_bootstrapped = false
+      AND o.clerk_created_by_user_id = t.clerk_user_id
+)
 INSERT INTO organization.membership_removal_intents (
     membership_id, organization_id, requested_by_identity_user_id
 ) VALUES ($1, $2, $3)
