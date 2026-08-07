@@ -1,0 +1,33 @@
+name: Organization Compile Diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: false
+      - name: Print bounded vet and test failures
+        shell: bash
+        run: |
+          set +e
+          cd service/organization-service
+          go vet ./... > /tmp/vet.log 2>&1
+          vet_status=$?
+          go test ./... > /tmp/test.log 2>&1
+          test_status=$?
+          echo '--- go vet tail ---'
+          tail -n 120 /tmp/vet.log
+          echo '--- go test tail ---'
+          tail -n 180 /tmp/test.log
+          if [[ ${vet_status} -ne 0 || ${test_status} -ne 0 ]]; then
+            exit 1
+          fi
