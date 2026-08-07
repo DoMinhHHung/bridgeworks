@@ -45,6 +45,14 @@ grep --quiet 'refresh_retry_seconds' \
 grep --quiet '@sha256:0e5377839f4ff5e322a5686ab6ce6797ba768008aca1bfc9b71149c3b326c4df' \
   "${context_dir}/Dockerfile" ||
   fail "APISIX base image digest is not pinned"
+grep --quiet '^[[:space:]]*uri: /health/live$' \
+  "${context_dir}/conf/apisix.cloud-run.yaml" ||
+  fail "Cloud Run gateway health route must use /health/live"
+
+if grep -Eq '^[[:space:]]*uri:[[:space:]]+[^[:space:]]*z[[:space:]]*$' \
+  "${context_dir}/conf/apisix.cloud-run.yaml"; then
+  fail "Cloud Run production route paths must not end in z"
+fi
 
 test "$(grep -c '^[[:space:]]*retries: 0$' "${context_dir}/conf/apisix.cloud-run.yaml")" = "2" ||
   fail "private Cloud Run upstream retries must be disabled"
@@ -137,7 +145,7 @@ for attempt in $(seq 1 60); do
       --max-time 2 \
       --output /dev/null \
       --write-out '%{http_code}' \
-      "http://127.0.0.1:${host_port}/healthz" || true
+      "http://127.0.0.1:${host_port}/health/live" || true
   )"
 
   if [[ "${status}" == "200" ]]; then
@@ -163,7 +171,7 @@ curl \
   --header "X-Request-Id: ${request_id}" \
   --dump-header "${response_headers}" \
   --output "${response_body}" \
-  "http://127.0.0.1:${host_port}/healthz"
+  "http://127.0.0.1:${host_port}/health/live"
 
 grep --quiet --ignore-case "^X-Request-Id: ${request_id}" \
   "${response_headers}" ||
