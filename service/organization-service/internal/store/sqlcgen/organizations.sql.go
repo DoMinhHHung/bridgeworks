@@ -11,6 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
+const disableOrganizationOwnerBootstrapEligibility = `-- name: DisableOrganizationOwnerBootstrapEligibility :exec
+UPDATE organization.organizations
+SET owner_bootstrap_eligible = false
+WHERE id = $1
+  AND owner_bootstrap_eligible = true
+  AND owner_bootstrapped = false
+`
+
+func (q *Queries) DisableOrganizationOwnerBootstrapEligibility(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, disableOrganizationOwnerBootstrapEligibility, id)
+	return err
+}
+
 const getOrganizationByClerkID = `-- name: GetOrganizationByClerkID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
