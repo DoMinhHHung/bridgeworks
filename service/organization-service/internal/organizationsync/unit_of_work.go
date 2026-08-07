@@ -52,12 +52,13 @@ type UnitOfWork interface {
 	InsertOrganization(context.Context, Organization) error
 	UpdateOrganizationProjection(context.Context, string, *string, *string, string) error
 	SetOrganizationCreator(context.Context, string, string) error
+	DisableOrganizationOwnerBootstrapEligibility(context.Context, uuid.UUID) error
 	MarkOrganizationOwnerBootstrapped(context.Context, uuid.UUID) error
 	MarkOrganizationDeleted(context.Context, string) error
 
 	GetMembership(context.Context, string) (Membership, bool, error)
 	GetActiveMembership(context.Context, uuid.UUID, string) (Membership, bool, error)
-	HasMembership(context.Context, uuid.UUID, string) (bool, error)
+	HasDeletedMembership(context.Context, uuid.UUID, string) (bool, error)
 	CreateMembershipInsertSavepoint(context.Context) error
 	RollbackMembershipInsertSavepoint(context.Context) error
 	ReleaseMembershipInsertSavepoint(context.Context) error
