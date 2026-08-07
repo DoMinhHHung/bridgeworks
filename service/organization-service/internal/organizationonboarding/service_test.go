@@ -15,11 +15,11 @@ type fakeFactory struct{ uow *fakeUnitOfWork }
 func (f fakeFactory) BeginOnboarding(context.Context) (UnitOfWork, error) { return f.uow, nil }
 
 type fakeUnitOfWork struct {
-	organization currentorganization.Organization
-	found        bool
-	updated      bool
-	verifyUpdate bool
-	commitCalls  int
+	organization  currentorganization.Organization
+	found         bool
+	updated       bool
+	verifyUpdate  bool
+	commitCalls   int
 	rollbackCalls int
 }
 
@@ -39,7 +39,7 @@ func (u *fakeUnitOfWork) UpdateVerificationStatus(_ context.Context, _ uuid.UUID
 	u.organization.VerificationStatus = status
 	return u.organization, nil
 }
-func (u *fakeUnitOfWork) Commit(context.Context) error { u.commitCalls++; return nil }
+func (u *fakeUnitOfWork) Commit(context.Context) error   { u.commitCalls++; return nil }
 func (u *fakeUnitOfWork) Rollback(context.Context) error { u.rollbackCalls++; return nil }
 
 func TestUpdateProfileNormalizesAndPreservesOmittedFields(t *testing.T) {
@@ -59,8 +59,8 @@ func TestUpdateProfileNormalizesAndPreservesOmittedFields(t *testing.T) {
 	actor := authorization.NewActorContext(uuid.New(), organizationID, uuid.New(), "admin", []string{authorization.PermissionOrganizationManage})
 
 	got, err := service.UpdateProfile(context.Background(), actor, ProfilePatch{
-		LegalName: StringPatch{Set: true, Value: &legalName},
-		Country: StringPatch{Set: true, Value: &country},
+		LegalName:   StringPatch{Set: true, Value: &legalName},
+		Country:     StringPatch{Set: true, Value: &country},
 		CompanyType: StringPatch{Set: true, Value: &companyType},
 	})
 	if err != nil {
