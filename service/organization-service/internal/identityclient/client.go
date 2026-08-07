@@ -27,7 +27,8 @@ type Client struct {
 }
 
 type currentUserResponse struct {
-	ID string `json:"id"`
+	ID           string  `json:"id"`
+	PrimaryEmail *string `json:"primary_email"`
 }
 
 type errorResponse struct {
@@ -162,7 +163,8 @@ func (c *Client) Resolve(
 		}
 
 		return currentorganization.Identity{
-			ID: identityID,
+			ID:           identityID,
+			PrimaryEmail: payload.PrimaryEmail,
 		}, nil
 
 	case http.StatusUnauthorized:

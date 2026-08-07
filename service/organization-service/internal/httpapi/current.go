@@ -18,16 +18,18 @@ type CurrentOrganizationResolver interface {
 }
 
 type organizationResponse struct {
-	ID                 string  `json:"id"`
-	Name               *string `json:"name"`
-	Slug               *string `json:"slug"`
-	Status             string  `json:"status"`
-	LegalName          *string `json:"legal_name"`
-	Website            *string `json:"website"`
-	Country            *string `json:"country"`
-	CompanyType        *string `json:"company_type"`
-	VerificationStatus string  `json:"verification_status"`
-	TrustStatus        string  `json:"trust_status"`
+	ID                      string     `json:"id"`
+	Name                    *string    `json:"name"`
+	Slug                    *string    `json:"slug"`
+	Status                  string     `json:"status"`
+	LegalName               *string    `json:"legal_name"`
+	Website                 *string    `json:"website"`
+	Country                 *string    `json:"country"`
+	CompanyType             *string    `json:"company_type"`
+	VerificationStatus      string     `json:"verification_status"`
+	TrustStatus             string     `json:"trust_status"`
+	BusinessEmailDomain     *string    `json:"business_email_domain"`
+	BusinessEmailVerifiedAt *time.Time `json:"business_email_verified_at"`
 }
 
 type membershipResponse struct {
@@ -68,16 +70,18 @@ func CurrentMembership(resolver CurrentOrganizationResolver) http.HandlerFunc {
 
 func writeOrganizationResponse(w http.ResponseWriter, organization currentorganization.Organization) {
 	writeJSON(w, http.StatusOK, organizationResponse{
-		ID:                 organization.ID.String(),
-		Name:               organization.Name,
-		Slug:               organization.Slug,
-		Status:             organization.Status,
-		LegalName:          organization.LegalName,
-		Website:            organization.Website,
-		Country:            organization.Country,
-		CompanyType:        organization.CompanyType,
-		VerificationStatus: organization.VerificationStatus,
-		TrustStatus:        organization.TrustStatus,
+		ID:                      organization.ID.String(),
+		Name:                    organization.Name,
+		Slug:                    organization.Slug,
+		Status:                  organization.Status,
+		LegalName:               organization.LegalName,
+		Website:                 organization.Website,
+		Country:                 organization.Country,
+		CompanyType:             organization.CompanyType,
+		VerificationStatus:      organization.VerificationStatus,
+		TrustStatus:             organization.TrustStatus,
+		BusinessEmailDomain:     organization.BusinessEmailDomain,
+		BusinessEmailVerifiedAt: organization.BusinessEmailVerifiedAt,
 	})
 }
 

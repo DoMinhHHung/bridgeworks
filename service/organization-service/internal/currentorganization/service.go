@@ -3,6 +3,7 @@ package currentorganization
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/authorization"
 	"github.com/google/uuid"
@@ -22,20 +23,24 @@ var (
 )
 
 type Identity struct {
-	ID uuid.UUID
+	ID           uuid.UUID
+	PrimaryEmail *string
 }
 
 type Organization struct {
-	ID                 uuid.UUID
-	Name               *string
-	Slug               *string
-	Status             string
-	LegalName          *string
-	Website            *string
-	Country            *string
-	CompanyType        *string
-	VerificationStatus string
-	TrustStatus        string
+	ID                            uuid.UUID
+	Name                          *string
+	Slug                          *string
+	Status                        string
+	LegalName                     *string
+	Website                       *string
+	Country                       *string
+	CompanyType                   *string
+	VerificationStatus            string
+	TrustStatus                   string
+	BusinessEmailDomain           *string
+	BusinessEmailVerifiedAt       *time.Time
+	BusinessEmailVerifiedByUserID *uuid.UUID
 }
 
 type Membership struct {
@@ -57,6 +62,7 @@ type Repository interface {
 
 type Result struct {
 	Actor        authorization.ActorContext
+	Identity     Identity
 	Organization Organization
 	Membership   Membership
 }
@@ -117,7 +123,12 @@ func (s *Service) Resolve(
 		membership.ApplicationRole,
 		permissions,
 	)
-	return Result{Actor: actor, Organization: organization, Membership: membership}, nil
+	return Result{
+		Actor:        actor,
+		Identity:     identity,
+		Organization: organization,
+		Membership:   membership,
+	}, nil
 }
 
 func RequirePermission(result Result, permission string) error {

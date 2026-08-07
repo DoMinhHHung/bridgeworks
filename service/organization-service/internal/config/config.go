@@ -30,6 +30,9 @@ const (
 	maximumWebhookMaxBodyBytes           = int64(5 * 1024 * 1024)
 	defaultClerkAuthLeeway               = 5 * time.Second
 	maximumClerkAuthLeeway               = 30 * time.Second
+	defaultClerkBackendAPIURL            = "https://api.clerk.com"
+	defaultClerkBackendAPITimeout        = 3 * time.Second
+	maximumClerkBackendAPITimeout        = 5 * time.Second
 	defaultIdentityServiceURL            = "http://identity-service:8080"
 	defaultIdentityServiceAuthMode       = "none"
 	IdentityServiceAuthModeNone          = "none"
@@ -63,6 +66,10 @@ type Config struct {
 	ClerkAuthorizedParties []string
 	ClerkAuthLeeway        time.Duration
 
+	ClerkSecretKey         string
+	ClerkBackendAPIURL     string
+	ClerkBackendAPITimeout time.Duration
+
 	WebhookSigningSecret  string
 	WebhookProcessTimeout time.Duration
 	WebhookMaxBodyBytes   int64
@@ -71,6 +78,8 @@ type Config struct {
 	IdentityServiceAuthMode string
 	IdentityServiceAudience string
 	IdentityRequestTimeout  time.Duration
+
+	PersonalEmailDomains []string
 }
 
 type MigrationConfig struct {
@@ -177,6 +186,22 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		return Config{}, fmt.Errorf("CLERK_AUTH_LEEWAY must be less than or equal to %s", maximumClerkAuthLeeway)
 	}
 
+	clerkSecretKey, err := requiredValue(lookup, "CLERK_SECRET_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+	clerkBackendAPIURL, err := serviceURLValue(lookup, "CLERK_BACKEND_API_URL", defaultClerkBackendAPIURL)
+	if err != nil {
+		return Config{}, err
+	}
+	clerkBackendAPITimeout, err := durationValue(lookup, "CLERK_BACKEND_API_TIMEOUT", defaultClerkBackendAPITimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if clerkBackendAPITimeout > maximumClerkBackendAPITimeout {
+		return Config{}, fmt.Errorf("CLERK_BACKEND_API_TIMEOUT must be less than or equal to %s", maximumClerkBackendAPITimeout)
+	}
+
 	webhookSigningSecret, err := requiredValue(lookup, "CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET")
 	if err != nil {
 		return Config{}, err
@@ -244,6 +269,11 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		)
 	}
 
+	personalEmailDomains, err := csvValue(lookup, "ORGANIZATION_PERSONAL_EMAIL_DOMAINS")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServiceName: serviceName, HTTPAddr: httpAddr,
 		ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout,
@@ -255,12 +285,15 @@ func load(lookup lookupEnvFunc) (Config, error) {
 		DatabaseMaxConnIdleTime: databaseMaxConnIdleTime, DatabaseHealthCheckPeriod: databaseHealthCheckPeriod,
 		ClerkJWTKey: clerkJWTKey, ClerkIssuer: clerkIssuer,
 		ClerkAuthorizedParties: clerkAuthorizedParties, ClerkAuthLeeway: clerkAuthLeeway,
-		WebhookSigningSecret: webhookSigningSecret, WebhookProcessTimeout: webhookProcessTimeout,
+		ClerkSecretKey: clerkSecretKey, ClerkBackendAPIURL: clerkBackendAPIURL,
+		ClerkBackendAPITimeout: clerkBackendAPITimeout,
+		WebhookSigningSecret:   webhookSigningSecret, WebhookProcessTimeout: webhookProcessTimeout,
 		WebhookMaxBodyBytes:     webhookMaxBodyBytes,
 		IdentityServiceURL:      identityServiceURL,
 		IdentityServiceAuthMode: identityServiceAuthMode,
 		IdentityServiceAudience: identityServiceAudience,
 		IdentityRequestTimeout:  identityRequestTimeout,
+		PersonalEmailDomains:    personalEmailDomains,
 	}, nil
 }
 
@@ -278,4 +311,28 @@ func loadMigration(lookup lookupEnvFunc) (MigrationConfig, error) {
 		return MigrationConfig{}, err
 	}
 	return MigrationConfig{DatabaseURL: databaseURL, Timeout: timeout, LogLevel: logLevel}, nil
+}
+
+func csvValue(lookup lookupEnvFunc, key string) ([]string, error) {
+	raw, err := requiredValue(lookup, key)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, item := range strings.Split(raw, ",") {
+		value := strings.ToLower(strings.TrimSpace(item))
+		if value == "" {
+			return nil, fmt.Errorf("%s must not contain empty values", key)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%s must contain at least one value", key)
+	}
+	return values, nil
 }

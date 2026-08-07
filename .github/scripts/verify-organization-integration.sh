@@ -184,7 +184,10 @@ assert body == {
     'company_type': None,
     'verification_status': 'unverified',
     'trust_status': 'unassessed',
+    'business_email_domain': None,
+    'business_email_verified_at': None,
 }
+assert 'business_email_verified_by_user_id' not in body
 assert all('clerk' not in key for key in body)
 PY
 

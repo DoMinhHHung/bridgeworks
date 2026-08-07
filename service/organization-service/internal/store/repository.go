@@ -357,18 +357,28 @@ func (u *onboardingUnitOfWork) Commit(ctx context.Context) error   { return u.tx
 func (u *onboardingUnitOfWork) Rollback(ctx context.Context) error { return u.tx.Rollback(ctx) }
 
 func currentOrganizationFromRow(row sqlcgen.OrganizationOrganization) currentorganization.Organization {
-	return currentorganization.Organization{
-		ID:                 row.ID,
-		Name:               row.Name,
-		Slug:               row.Slug,
-		Status:             row.Status,
-		LegalName:          row.LegalName,
-		Website:            row.Website,
-		Country:            row.Country,
-		CompanyType:        row.CompanyType,
-		VerificationStatus: row.VerificationStatus,
-		TrustStatus:        row.TrustStatus,
+	organization := currentorganization.Organization{
+		ID:                  row.ID,
+		Name:                row.Name,
+		Slug:                row.Slug,
+		Status:              row.Status,
+		LegalName:           row.LegalName,
+		Website:             row.Website,
+		Country:             row.Country,
+		CompanyType:         row.CompanyType,
+		VerificationStatus:  row.VerificationStatus,
+		TrustStatus:         row.TrustStatus,
+		BusinessEmailDomain: row.BusinessEmailDomain,
 	}
+	if row.BusinessEmailVerifiedAt.Valid {
+		verifiedAt := row.BusinessEmailVerifiedAt.Time.UTC()
+		organization.BusinessEmailVerifiedAt = &verifiedAt
+	}
+	if row.BusinessEmailVerifiedByUserID.Valid {
+		verifiedBy := uuid.UUID(row.BusinessEmailVerifiedByUserID.Bytes)
+		organization.BusinessEmailVerifiedByUserID = &verifiedBy
+	}
+	return organization
 }
 
 func organizationFromRow(row sqlcgen.OrganizationOrganization) organizationsync.Organization {

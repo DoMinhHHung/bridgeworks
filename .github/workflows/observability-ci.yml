@@ -50,13 +50,12 @@ jobs:
         run: |
           set -euo pipefail
           git diff --exit-code origin/main...HEAD -- \
-            service/identity-service/migrations/000001_create_app_users.sql
-          git diff --exit-code origin/main...HEAD -- \
-            service/organization-service/migrations/000001_create_organization_foundation.sql
-          git diff --exit-code origin/main...HEAD -- \
-            service/organization-service/migrations/000002_complete_organization_domain.sql
+            service/identity-service/migrations/000001_create_app_users.sql \
+            service/organization-service/migrations/000001_create_organization_foundation.sql \
+            service/organization-service/migrations/000002_complete_organization_domain.sql \
+            service/organization-service/migrations/000003_add_owner_bootstrap_state.sql
           test "$(find service/identity-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "1"
-          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "3"
+          test "$(find service/organization-service/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" = "4"
 
       - name: Verify private observability topology and bounded contracts
         shell: bash

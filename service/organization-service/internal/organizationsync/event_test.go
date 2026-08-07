@@ -3,6 +3,8 @@ package organizationsync
 import (
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestDecodeOrganizationEvent(t *testing.T) {
@@ -36,6 +38,31 @@ func TestDecodeMembershipEventNarrowShape(t *testing.T) {
 	}
 	if event.Membership.ClerkRole == nil || *event.Membership.ClerkRole != ClerkRoleAdmin {
 		t.Fatalf("role not normalized")
+	}
+}
+
+func TestDecodeMembershipInvitationIntentMarker(t *testing.T) {
+	intentID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-000000000091")
+	payload := []byte(`{"type":"organizationMembership.created","timestamp":1785744000000,"data":{"id":"mem_123","organization":{"id":"org_123"},"public_user_data":{"user_id":"user_123"},"role":"org:member","public_metadata":{"bridgeworks_invitation_id":"018f0c76-8f6c-7cc4-8000-000000000091","application_role":"owner","email":"ignored@example.test"}}}`)
+	event, supported, err := Decode("msg_invitation", payload)
+	if err != nil || !supported {
+		t.Fatalf("Decode() err = %v", err)
+	}
+	if event.Membership.InvitationIntent == nil || *event.Membership.InvitationIntent != intentID {
+		t.Fatalf("invitation intent = %#v", event.Membership.InvitationIntent)
+	}
+}
+
+func TestDecodeIgnoresInvalidInvitationIntentMarker(t *testing.T) {
+	for _, value := range []string{"not-a-uuid", "550e8400-e29b-41d4-a716-446655440000"} {
+		payload := []byte(`{"type":"organizationMembership.created","timestamp":1785744000000,"data":{"id":"mem_123","organization":{"id":"org_123"},"public_user_data":{"user_id":"user_123"},"public_metadata":{"bridgeworks_invitation_id":"` + value + `"}}}`)
+		event, supported, err := Decode("msg_invalid_intent", payload)
+		if err != nil || !supported {
+			t.Fatalf("Decode() err = %v", err)
+		}
+		if event.Membership.InvitationIntent != nil {
+			t.Fatalf("invalid marker %q was trusted", value)
+		}
 	}
 }
 

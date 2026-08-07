@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -48,6 +50,7 @@ type MembershipProjection struct {
 	ClerkMembershipID string
 	ClerkUserID       string
 	ClerkRole         *string
+	InvitationIntent  *uuid.UUID
 }
 
 type envelope struct {
@@ -71,7 +74,8 @@ type membershipData struct {
 	PublicUserData *struct {
 		UserID string `json:"user_id"`
 	} `json:"public_user_data"`
-	Role *string `json:"role"`
+	Role           *string                    `json:"role"`
+	PublicMetadata map[string]json.RawMessage `json:"public_metadata"`
 }
 
 func Decode(eventID string, payload []byte) (Event, bool, error) {
@@ -120,6 +124,7 @@ func Decode(eventID string, payload []byte) (Event, bool, error) {
 			ClerkMembershipID: membershipID,
 			ClerkUserID:       userID,
 			ClerkRole:         normalizeOptional(data.Role),
+			InvitationIntent:  invitationIntentID(data.PublicMetadata),
 		}
 		return event, true, nil
 	}
@@ -140,6 +145,22 @@ func Decode(eventID string, payload []byte) (Event, bool, error) {
 		CreatedBy: normalizeOptional(data.CreatedBy),
 	}
 	return event, true, nil
+}
+
+func invitationIntentID(metadata map[string]json.RawMessage) *uuid.UUID {
+	raw, ok := metadata["bridgeworks_invitation_id"]
+	if !ok {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil
+	}
+	id, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil || id.Version() != 7 {
+		return nil
+	}
+	return &id
 }
 
 func Supported(eventType string) bool {

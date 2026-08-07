@@ -12,7 +12,9 @@ func validEnvironment() map[string]string {
 		"CLERK_JWT_KEY":            "public-key",
 		"CLERK_ISSUER":             "https://clerk.example.test",
 		"CLERK_AUTHORIZED_PARTIES": "http://localhost:3000,https://app.example.test",
+		"CLERK_SECRET_KEY":         "sk_test_local",
 		"CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET": "whsec_test",
+		"ORGANIZATION_PERSONAL_EMAIL_DOMAINS":       "gmail.com,outlook.com",
 	}
 }
 func lookup(values map[string]string) lookupEnvFunc {
@@ -29,6 +31,12 @@ func TestLoadValid(t *testing.T) {
 		cfg.IdentityServiceAudience != "" {
 		t.Fatalf("identity defaults unexpected")
 	}
+	if cfg.ClerkBackendAPIURL != defaultClerkBackendAPIURL || cfg.ClerkBackendAPITimeout != 3*time.Second {
+		t.Fatalf("Clerk Backend API defaults unexpected")
+	}
+	if len(cfg.PersonalEmailDomains) != 2 || cfg.PersonalEmailDomains[0] != "gmail.com" {
+		t.Fatalf("personal email policy unexpected: %#v", cfg.PersonalEmailDomains)
+	}
 	if cfg.DatabaseMaxConns != 5 || cfg.DatabaseMinConns != 0 {
 		t.Fatalf("pool config unexpected")
 	}
@@ -40,6 +48,28 @@ func TestLoadRejectsWebhookTimeoutBounds(t *testing.T) {
 		if _, err := load(lookup(env)); err == nil {
 			t.Fatalf("expected %s rejection", value)
 		}
+	}
+}
+func TestLoadRejectsClerkBackendConfiguration(t *testing.T) {
+	env := validEnvironment()
+	delete(env, "CLERK_SECRET_KEY")
+	if _, err := load(lookup(env)); err == nil {
+		t.Fatal("expected missing Clerk secret rejection")
+	}
+	env = validEnvironment()
+	env["CLERK_BACKEND_API_TIMEOUT"] = "6s"
+	if _, err := load(lookup(env)); err == nil {
+		t.Fatal("expected Clerk Backend API timeout rejection")
+	}
+	env = validEnvironment()
+	env["CLERK_BACKEND_API_URL"] = "https://api.clerk.com/v1"
+	if _, err := load(lookup(env)); err == nil {
+		t.Fatal("expected versioned Clerk Backend API path rejection")
+	}
+	env = validEnvironment()
+	env["ORGANIZATION_PERSONAL_EMAIL_DOMAINS"] = "gmail.com,"
+	if _, err := load(lookup(env)); err == nil {
+		t.Fatal("expected empty personal email domain rejection")
 	}
 }
 func TestLoadRejectsIdentityTimeoutAndURL(t *testing.T) {
@@ -131,7 +161,7 @@ func TestConfigErrorsDoNotEchoSecrets(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), env["DATABASE_URL"]) {
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), env["DATABASE_URL"]) || strings.Contains(err.Error(), env["CLERK_SECRET_KEY"]) {
 		t.Fatal("config error leaked secret")
 	}
 }

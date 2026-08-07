@@ -9,18 +9,20 @@ import (
 )
 
 type Dependencies struct {
-	ServiceName      string
-	Logger           *slog.Logger
-	Metrics          Metrics
-	Readiness        ReadinessChecker
-	ReadinessTimeout time.Duration
-	WebhookVerifier  WebhookVerifier
-	WebhookProcessor EventOutcomeProcessor
-	WebhookMaxBytes  int64
-	WebhookTimeout   time.Duration
-	Authenticate     func(http.Handler) http.Handler
-	CurrentResolver  CurrentOrganizationResolver
-	Onboarding       OrganizationOnboarding
+	ServiceName               string
+	Logger                    *slog.Logger
+	Metrics                   Metrics
+	Readiness                 ReadinessChecker
+	ReadinessTimeout          time.Duration
+	WebhookVerifier           WebhookVerifier
+	WebhookProcessor          EventOutcomeProcessor
+	WebhookMaxBytes           int64
+	WebhookTimeout            time.Duration
+	Authenticate              func(http.Handler) http.Handler
+	CurrentResolver           CurrentOrganizationResolver
+	Onboarding                OrganizationOnboarding
+	BusinessEmailVerification BusinessEmailVerification
+	MembershipAdministration  MembershipAdministration
 }
 
 func NewRouter(dependencies Dependencies) http.Handler {
@@ -40,22 +42,20 @@ func NewRouter(dependencies Dependencies) http.Handler {
 		dependencies.WebhookTimeout,
 	))
 
-	currentOrganization := AuthenticatedResponseHeaders(
-		dependencies.Authenticate(CurrentOrganization(dependencies.CurrentResolver)),
-	)
-	patchCurrentOrganization := AuthenticatedResponseHeaders(
-		dependencies.Authenticate(PatchCurrentOrganization(dependencies.CurrentResolver, dependencies.Onboarding)),
-	)
-	requestVerification := AuthenticatedResponseHeaders(
-		dependencies.Authenticate(RequestCurrentOrganizationVerification(dependencies.CurrentResolver, dependencies.Onboarding)),
-	)
-	currentMembership := AuthenticatedResponseHeaders(
-		dependencies.Authenticate(CurrentMembership(dependencies.CurrentResolver)),
-	)
-	router.Method(http.MethodGet, "/organizations/current", currentOrganization)
-	router.Method(http.MethodPatch, "/organizations/current", patchCurrentOrganization)
-	router.Method(http.MethodPost, "/organizations/current/verification", requestVerification)
-	router.Method(http.MethodGet, "/organizations/current/membership", currentMembership)
+	authenticated := func(handler http.HandlerFunc) http.Handler {
+		return AuthenticatedResponseHeaders(dependencies.Authenticate(handler))
+	}
+
+	router.Method(http.MethodGet, "/organizations/current", authenticated(CurrentOrganization(dependencies.CurrentResolver)))
+	router.Method(http.MethodPatch, "/organizations/current", authenticated(PatchCurrentOrganization(dependencies.CurrentResolver, dependencies.Onboarding)))
+	router.Method(http.MethodPost, "/organizations/current/verification", authenticated(RequestCurrentOrganizationVerification(dependencies.CurrentResolver, dependencies.Onboarding)))
+	router.Method(http.MethodPost, "/organizations/current/business-email-verification", authenticated(VerifyCurrentOrganizationBusinessEmail(dependencies.CurrentResolver, dependencies.BusinessEmailVerification)))
+	router.Method(http.MethodPost, "/organizations/current/invitations", authenticated(CreateCurrentOrganizationInvitation(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
+	router.Method(http.MethodGet, "/organizations/current/membership", authenticated(CurrentMembership(dependencies.CurrentResolver)))
+	router.Method(http.MethodDelete, "/organizations/current/membership", authenticated(LeaveCurrentOrganization(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
+	router.Method(http.MethodPatch, "/organizations/current/members/{membershipID}/role", authenticated(PatchCurrentOrganizationMemberRole(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
+	router.Method(http.MethodDelete, "/organizations/current/members/{membershipID}", authenticated(RemoveCurrentOrganizationMember(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
+	router.Method(http.MethodPost, "/organizations/current/ownership-transfer", authenticated(TransferCurrentOrganizationOwnership(dependencies.CurrentResolver, dependencies.MembershipAdministration)))
 
 	return router
 }
