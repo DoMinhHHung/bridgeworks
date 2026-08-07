@@ -32,7 +32,7 @@ func TestCreateInvitationUsesProviderMemberRoleAndOpaqueLocalIntent(t *testing.T
 	}))
 	defer server.Close()
 
-	client, err := New("sk_test_private", server.URL+"/v1", time.Second)
+	client, err := New("sk_test_private", server.URL, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestDeleteMembershipUsesOrganizationAndUser(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"mem_test","object":"organization_membership","role":"org:member"}`))
 	}))
 	defer server.Close()
-	client, err := New("sk_test_private", server.URL+"/v1", time.Second)
+	client, err := New("sk_test_private", server.URL, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestProviderErrorsAreSanitized(t *testing.T) {
 				_, _ = w.Write([]byte(`{"errors":[{"message":"provider-secret-diagnostic"}]}`))
 			}))
 			defer server.Close()
-			client, err := New("sk_test_private", server.URL+"/v1", time.Second)
+			client, err := New("sk_test_private", server.URL, time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +125,7 @@ func TestProviderTimeoutIsUnavailable(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	client, err := New("sk_test_private", server.URL+"/v1", 20*time.Millisecond)
+	client, err := New("sk_test_private", server.URL, 20*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
