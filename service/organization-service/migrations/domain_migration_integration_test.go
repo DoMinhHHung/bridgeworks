@@ -3,7 +3,6 @@ package migrations_test
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"os"
 	"reflect"
 	"sort"
@@ -191,9 +190,16 @@ func TestDomainMigrationUpgradesExistingRowsSafely(t *testing.T) {
 	}
 }
 
-func assertStringSet(t *testing.T, ctx context.Context, db *sql.DB, query string, want []string) {
+func assertStringSet(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	query string,
+	want []string,
+	args ...any,
+) {
 	t.Helper()
-	rows, err := db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		t.Fatalf("query set: %v", err)
 	}
@@ -210,9 +216,10 @@ func assertStringSet(t *testing.T, ctx context.Context, db *sql.DB, query string
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate set: %v", err)
 	}
-	sort.Strings(want)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("set = %v, want %v", got, want)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	if !reflect.DeepEqual(got, wantSorted) {
+		t.Fatalf("set = %v, want %v", got, wantSorted)
 	}
 }
 
@@ -222,8 +229,9 @@ func assertRolePermissions(t *testing.T, ctx context.Context, db *sql.DB, role s
 		t,
 		ctx,
 		db,
-		fmt.Sprintf("select permission_key from organization.role_permissions where role_key = '%s' order by permission_key", role),
+		"select permission_key from organization.role_permissions where role_key = $1 order by permission_key",
 		want,
+		role,
 	)
 }
 
