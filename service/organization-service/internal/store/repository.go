@@ -190,6 +190,10 @@ func (u *unitOfWork) SetOrganizationCreator(ctx context.Context, clerkOrganizati
 	return err
 }
 
+func (u *unitOfWork) DisableOrganizationOwnerBootstrapEligibility(ctx context.Context, organizationID uuid.UUID) error {
+	return u.queries.DisableOrganizationOwnerBootstrapEligibility(ctx, organizationID)
+}
+
 func (u *unitOfWork) MarkOrganizationOwnerBootstrapped(ctx context.Context, organizationID uuid.UUID) error {
 	return u.queries.MarkOrganizationOwnerBootstrapped(ctx, organizationID)
 }
@@ -228,8 +232,8 @@ func (u *unitOfWork) GetActiveMembership(
 	return membershipFromRow(row), true, nil
 }
 
-func (u *unitOfWork) HasMembership(ctx context.Context, organizationID uuid.UUID, clerkUserID string) (bool, error) {
-	return u.queries.HasMembershipByOrganizationUser(ctx, sqlcgen.HasMembershipByOrganizationUserParams{
+func (u *unitOfWork) HasDeletedMembership(ctx context.Context, organizationID uuid.UUID, clerkUserID string) (bool, error) {
+	return u.queries.HasDeletedMembershipByOrganizationUser(ctx, sqlcgen.HasDeletedMembershipByOrganizationUserParams{
 		OrganizationID: organizationID,
 		ClerkUserID:    clerkUserID,
 	})
