@@ -35,6 +35,12 @@ type Membership struct {
 	Status            string
 }
 
+type InvitationIntent struct {
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	ApplicationRole string
+}
+
 type UniqueConstraintError struct {
 	Constraint string
 	Cause      error
@@ -66,6 +72,9 @@ type UnitOfWork interface {
 	UpdateMembershipClerkRole(context.Context, string, *string) error
 	UpdateMembershipApplicationRole(context.Context, uuid.UUID, string) error
 	MarkMembershipDeleted(context.Context, string) error
+	GetPendingInvitationIntent(context.Context, uuid.UUID, uuid.UUID) (InvitationIntent, bool, error)
+	ConsumeInvitationIntent(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	DeleteMembershipRemovalIntent(context.Context, uuid.UUID, uuid.UUID) error
 
 	Commit(context.Context) error
 	Rollback(context.Context) error
