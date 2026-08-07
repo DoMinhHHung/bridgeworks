@@ -21,7 +21,10 @@ SELECT id,
        to_value,
        occurred_at
 FROM organization.audit_events
-WHERE organization_id = $1
-  AND (occurred_at, id) < ($2::timestamptz, $3::uuid)
+WHERE organization_id = sqlc.arg(organization_id)
+  AND (occurred_at, id) < (
+      sqlc.arg(before_time)::timestamptz,
+      sqlc.arg(before_id)::uuid
+  )
 ORDER BY occurred_at DESC, id DESC
-LIMIT $4;
+LIMIT sqlc.arg(result_limit);
