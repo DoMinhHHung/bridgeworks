@@ -147,7 +147,10 @@ jobs:
           set -euo pipefail
           docker compose up -d organization-postgres
           docker compose build organization-migrate
-          first="$(docker compose run --rm organization-migrate up)"
+          if ! first="$(docker compose run --rm organization-migrate up)"; then
+            printf '%s\n' "${first}"
+            exit 1
+          fi
           printf '%s\n' "${first}"
           grep --quiet '"count":2' <<< "${first}"
           second="$(docker compose run --rm organization-migrate up)"
