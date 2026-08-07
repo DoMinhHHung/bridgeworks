@@ -94,16 +94,27 @@ private_request() {
     --env "BODY=/work/${prefix}-body.json" \
     --env "HEADERS=/work/${prefix}-headers" \
     --env "FORGED=${forged}" \
-    --entrypoint sh \
+    --entrypoint /bin/sh \
     curlimages/curl:8.17.0 \
     -ec '
-      set -- curl --show-error --silent --output "${BODY}" --dump-header "${HEADERS}" --write-out "%{http_code}" \
-        -H "Authorization: Bearer $(cat /auth/platform-access.token)" \
-        -H "X-Request-Id: ${REQUEST_ID}"
       if [ "${FORGED}" = "true" ]; then
-        set -- "$@" -H "X-Platform-Admin: true"
+        curl --show-error --silent \
+          --output "${BODY}" \
+          --dump-header "${HEADERS}" \
+          --write-out "%{http_code}" \
+          -H "Authorization: Bearer $(cat /auth/platform-access.token)" \
+          -H "X-Request-Id: ${REQUEST_ID}" \
+          -H "X-Platform-Admin: true" \
+          "${PRIVATE_URL}"
+      else
+        curl --show-error --silent \
+          --output "${BODY}" \
+          --dump-header "${HEADERS}" \
+          --write-out "%{http_code}" \
+          -H "Authorization: Bearer $(cat /auth/platform-access.token)" \
+          -H "X-Request-Id: ${REQUEST_ID}" \
+          "${PRIVATE_URL}"
       fi
-      "$@" "${PRIVATE_URL}"
     '
 }
 
