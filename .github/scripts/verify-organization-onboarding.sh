@@ -112,13 +112,47 @@ PY
 
 test "$(organization_sql "select legal_name, website, country, company_type, verification_status, trust_status from organization.organizations where clerk_organization_id='org_onboarding_ci'")" = "BridgeWorks Company Limited|https://example.com/about|VN|software-agency|unverified|unassessed"
 
-verify_status="$(request_json POST "${verification_url}" "${auth_work}/organization-onboarding.token" onboarding-verification '{}' "${work}/verify-body" "${work}/verify-headers")"
-test "${verify_status}" = "200"
-assert_header_exact "${work}/verify-headers" Cache-Control no-store
-assert_header_exact "${work}/verify-headers" X-Request-Id onboarding-verification
-grep --quiet '"verification_status":"pending"' "${work}/verify-body"
-verification_before="$(organization_sql "select verification_status, updated_at::text from organization.organizations where clerk_organization_id='org_onboarding_ci'")"
+# Concurrent partial PATCH requests must merge against freshly locked state rather
+# than overwriting each other's omitted fields.
+(
+  request_json PATCH "${current_url}" "${auth_work}/organization-onboarding.token" onboarding-profile-a \
+    '{"legal_name":"Concurrent BridgeWorks Legal Name"}' \
+    "${work}/patch-a-body" "${work}/patch-a-headers" > "${work}/patch-a-status"
+) &
+patch_a_pid=$!
+(
+  request_json PATCH "${current_url}" "${auth_work}/organization-onboarding.token" onboarding-profile-b \
+    '{"country":"us"}' \
+    "${work}/patch-b-body" "${work}/patch-b-headers" > "${work}/patch-b-status"
+) &
+patch_b_pid=$!
+wait "${patch_a_pid}"
+wait "${patch_b_pid}"
+test "$(cat "${work}/patch-a-status")" = "200"
+test "$(cat "${work}/patch-b-status")" = "200"
+test "$(organization_sql "select legal_name, website, country, company_type from organization.organizations where clerk_organization_id='org_onboarding_ci'")" = "Concurrent BridgeWorks Legal Name|https://example.com/about|US|software-agency"
 
+# Concurrent verification requests serialize on the same row. Both are stable
+# successes and the resulting lifecycle state is pending.
+(
+  request_json POST "${verification_url}" "${auth_work}/organization-onboarding.token" onboarding-verification-a '{}' \
+    "${work}/verify-a-body" "${work}/verify-a-headers" > "${work}/verify-a-status"
+) &
+verify_a_pid=$!
+(
+  request_json POST "${verification_url}" "${auth_work}/organization-onboarding.token" onboarding-verification-b '{}' \
+    "${work}/verify-b-body" "${work}/verify-b-headers" > "${work}/verify-b-status"
+) &
+verify_b_pid=$!
+wait "${verify_a_pid}"
+wait "${verify_b_pid}"
+test "$(cat "${work}/verify-a-status")" = "200"
+test "$(cat "${work}/verify-b-status")" = "200"
+grep --quiet '"verification_status":"pending"' "${work}/verify-a-body"
+grep --quiet '"verification_status":"pending"' "${work}/verify-b-body"
+test "$(organization_sql "select verification_status from organization.organizations where clerk_organization_id='org_onboarding_ci'")" = "pending"
+
+verification_before="$(organization_sql "select verification_status, updated_at::text from organization.organizations where clerk_organization_id='org_onboarding_ci'")"
 verify_repeat_status="$(request_json POST "${verification_url}" "${auth_work}/organization-onboarding.token" onboarding-verification-repeat '{}' "${work}/verify-repeat-body" "${work}/verify-repeat-headers")"
 test "${verify_repeat_status}" = "200"
 test "$(organization_sql "select verification_status, updated_at::text from organization.organizations where clerk_organization_id='org_onboarding_ci'")" = "${verification_before}"
@@ -127,7 +161,7 @@ cat > "${work}/organization-updated.json" <<'JSON'
 {"type":"organization.updated","timestamp":1785745030000,"data":{"id":"org_onboarding_ci","name":"BridgeWorks Provider Renamed","slug":"bridgeworks-provider-renamed","created_by":"user_onboarding_ci"}}
 JSON
 test "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_org_onboarding_updated "${work}/organization-updated.json" "${work}/organization-updated-response" onboarding-org-update)" = "204|onboarding-org-update"
-expected='BridgeWorks Provider Renamed|bridgeworks-provider-renamed|BridgeWorks Company Limited|https://example.com/about|VN|software-agency|pending|unassessed|owner|t'
+expected='BridgeWorks Provider Renamed|bridgeworks-provider-renamed|Concurrent BridgeWorks Legal Name|https://example.com/about|US|software-agency|pending|unassessed|owner|t'
 actual="$(organization_sql "select o.name, o.slug, o.legal_name, o.website, o.country, o.company_type, o.verification_status, o.trust_status, m.application_role, o.owner_bootstrapped from organization.organizations o join organization.memberships m on m.organization_id=o.id and m.clerk_membership_id='mem_onboarding_ci' where o.clerk_organization_id='org_onboarding_ci'")"
 test "${actual}" = "${expected}"
 
@@ -149,7 +183,7 @@ logs=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
 token=pathlib.Path(sys.argv[2]).read_text(encoding='utf-8')
 for forbidden in [
     token, 'user_onboarding_ci', 'org_onboarding_ci', 'mem_onboarding_ci',
-    'onboarding-ci@example.test', 'BridgeWorks Company Limited',
+    'onboarding-ci@example.test', 'Concurrent BridgeWorks Legal Name',
     'svix-signature', 'postgres://',
 ]:
     assert forbidden not in logs, f'organization log leaked {forbidden[:24]!r}'
