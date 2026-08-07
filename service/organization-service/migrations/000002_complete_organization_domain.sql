@@ -1,6 +1,6 @@
 -- +goose Up
 
--- Forward-only migration. No rollback section is defined because removing these
+-- Forward-only migration by design. No rollback section is defined because removing these
 -- columns or catalog rows would discard BridgeWorks-owned organization state and can
 -- invalidate existing memberships.
 
