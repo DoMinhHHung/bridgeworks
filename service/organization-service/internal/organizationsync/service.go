@@ -202,11 +202,13 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 	}
 
 	if event.Type == EventMembershipDeleted {
+		deletedMembershipID := uuid.Nil
 		if !membershipFound {
 			id, err := s.newID("generate membership tombstone ID")
 			if err != nil {
 				return err
 			}
+			deletedMembershipID = id
 			if err := s.insertMembership(ctx, uow, Membership{
 				ID:                id,
 				ClerkMembershipID: event.Membership.ClerkMembershipID,
@@ -218,9 +220,17 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 			}); err != nil {
 				return err
 			}
-		} else if existing.Status != "deleted" {
-			if err := uow.MarkMembershipDeleted(ctx, event.Membership.ClerkMembershipID); err != nil {
-				return safeerr.Wrap("mark membership deleted", err)
+		} else {
+			deletedMembershipID = existing.ID
+			if existing.Status != "deleted" {
+				if err := uow.MarkMembershipDeleted(ctx, event.Membership.ClerkMembershipID); err != nil {
+					return safeerr.Wrap("mark membership deleted", err)
+				}
+			}
+		}
+		if deletedMembershipID != uuid.Nil {
+			if err := uow.DeleteMembershipRemovalIntent(ctx, organization.ID, deletedMembershipID); err != nil {
+				return safeerr.Wrap("clear reconciled membership removal intent", err)
 			}
 		}
 		return s.bootstrapInitialOwner(ctx, uow, organization)
@@ -243,6 +253,31 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 		return s.bootstrapInitialOwner(ctx, uow, organization)
 	}
 
+	applicationRole := InitialApplicationRole(event.Membership.ClerkRole)
+	var invitation *InvitationIntent
+	if event.Type == EventMembershipCreated && event.Membership.InvitationIntent != nil {
+		intent, found, err := uow.GetPendingInvitationIntent(
+			ctx,
+			organization.ID,
+			*event.Membership.InvitationIntent,
+		)
+		if err != nil {
+			return safeerr.Wrap("load local invitation intent", err)
+		}
+		if found {
+			invitation = &intent
+			applicationRole = intent.ApplicationRole
+			if organization.OwnerBootstrapEligible && !organization.OwnerBootstrapped &&
+				organization.ClerkCreatedByUserID != nil &&
+				*organization.ClerkCreatedByUserID == event.Membership.ClerkUserID {
+				if err := uow.DisableOrganizationOwnerBootstrapEligibility(ctx, organization.ID); err != nil {
+					return safeerr.Wrap("disable creator bootstrap for invited rejoin", err)
+				}
+				organization.OwnerBootstrapEligible = false
+			}
+		}
+	}
+
 	id, err := s.newID("generate membership ID")
 	if err != nil {
 		return err
@@ -253,10 +288,15 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 		OrganizationID:    organization.ID,
 		ClerkUserID:       event.Membership.ClerkUserID,
 		ClerkRole:         event.Membership.ClerkRole,
-		ApplicationRole:   InitialApplicationRole(event.Membership.ClerkRole),
+		ApplicationRole:   applicationRole,
 		Status:            "active",
 	}); err != nil {
 		return err
+	}
+	if invitation != nil {
+		if err := uow.ConsumeInvitationIntent(ctx, organization.ID, invitation.ID, id); err != nil {
+			return safeerr.Wrap("consume local invitation intent", err)
+		}
 	}
 	return s.bootstrapInitialOwner(ctx, uow, organization)
 }
