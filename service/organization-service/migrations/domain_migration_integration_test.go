@@ -250,9 +250,9 @@ func assertRolePermissions(t *testing.T, ctx context.Context, db *sql.DB, role s
 	)
 }
 
-func assertConstraintRejects(t *testing.T, ctx context.Context, db *sql.DB, statement string, organizationID string) {
+func assertConstraintRejects(t *testing.T, ctx context.Context, db *sql.DB, statement string, args ...any) {
 	t.Helper()
-	if _, err := db.ExecContext(ctx, statement, organizationID); err == nil {
+	if _, err := db.ExecContext(ctx, statement, args...); err == nil {
 		t.Fatalf("constraint accepted invalid statement: %s", statement)
 	}
 }
