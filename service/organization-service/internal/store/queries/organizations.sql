@@ -1,14 +1,14 @@
 -- name: GetOrganizationByClerkID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 FROM organization.organizations
 WHERE clerk_organization_id = $1;
 
 -- name: LockOrganizationByID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 FROM organization.organizations
 WHERE id = $1
 FOR UPDATE;
@@ -19,7 +19,7 @@ INSERT INTO organization.organizations (
 ) VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
 
 -- name: UpdateOrganizationProjection :exec
 UPDATE organization.organizations
@@ -35,13 +35,15 @@ WHERE clerk_organization_id = $1
   AND clerk_created_by_user_id IS NULL
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
 
 -- name: MarkOrganizationOwnerBootstrapped :exec
 UPDATE organization.organizations
 SET owner_bootstrapped = true
 WHERE id = $1
+  AND owner_bootstrap_eligible = true
   AND owner_bootstrapped = false
+  AND status = 'active'
   AND clerk_created_by_user_id IS NOT NULL;
 
 -- name: UpdateOrganizationProductProfile :one
@@ -53,7 +55,7 @@ SET legal_name = $2,
 WHERE id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
 
 -- name: UpdateOrganizationVerificationStatus :one
 UPDATE organization.organizations
@@ -61,7 +63,7 @@ SET verification_status = $2
 WHERE id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
 
 -- name: MarkOrganizationDeleted :one
 UPDATE organization.organizations
@@ -71,4 +73,4 @@ SET name = NULL,
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped;
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible;
