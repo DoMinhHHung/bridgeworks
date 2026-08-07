@@ -19,6 +19,7 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/identityclient"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/observability"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationid"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationonboarding"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationsync"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/postgres"
@@ -126,12 +127,13 @@ func run() error {
 	repository := store.New(database)
 	synchronizer := organizationsync.New(repository, organizationid.UUIDV7Generator{})
 	currentService := currentorganization.New(identity, repository)
+	onboardingService := organizationonboarding.New(repository)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		ServiceName: cfg.ServiceName, Logger: logger, Metrics: metrics,
 		Readiness: database, ReadinessTimeout: cfg.DatabaseReadinessTimeout,
 		WebhookVerifier: verifier, WebhookProcessor: synchronizer,
 		WebhookMaxBytes: cfg.WebhookMaxBodyBytes, WebhookTimeout: cfg.WebhookProcessTimeout,
-		Authenticate: authenticate, CurrentResolver: currentService,
+		Authenticate: authenticate, CurrentResolver: currentService, Onboarding: onboardingService,
 	})
 	server := &http.Server{
 		Addr: cfg.HTTPAddr, Handler: router,
