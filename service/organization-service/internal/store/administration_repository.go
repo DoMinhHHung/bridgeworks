@@ -72,10 +72,13 @@ func (u *businessVerificationUnitOfWork) UpdateBusinessEmailVerification(
 	return u.queries.UpdateOrganizationBusinessEmailVerification(
 		ctx,
 		sqlcgen.UpdateOrganizationBusinessEmailVerificationParams{
-			ID:                            organizationID,
-			BusinessEmailDomain:           &domain,
-			BusinessEmailVerifiedAt:       pgtype.Timestamptz{Time: verifiedAt.UTC(), Valid: true},
-			BusinessEmailVerifiedByUserID: &identityUserID,
+			ID:                      organizationID,
+			BusinessEmailDomain:     &domain,
+			BusinessEmailVerifiedAt: pgtype.Timestamptz{Time: verifiedAt.UTC(), Valid: true},
+			BusinessEmailVerifiedByUserID: pgtype.UUID{
+				Bytes: identityUserID,
+				Valid: true,
+			},
 		},
 	)
 }
@@ -252,9 +255,12 @@ func (u *unitOfWork) ConsumeInvitationIntent(
 	return u.queries.ConsumeMembershipInvitationIntent(
 		ctx,
 		sqlcgen.ConsumeMembershipInvitationIntentParams{
-			OrganizationID:       organizationID,
-			ID:                   intentID,
-			ConsumedMembershipID: &membershipID,
+			OrganizationID: organizationID,
+			ID:             intentID,
+			ConsumedMembershipID: pgtype.UUID{
+				Bytes: membershipID,
+				Valid: true,
+			},
 		},
 	)
 }
