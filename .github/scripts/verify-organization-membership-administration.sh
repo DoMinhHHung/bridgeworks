@@ -10,6 +10,7 @@ auth_work="${RUNNER_TEMP}/clerk-auth"
 mkdir -p "${work}"
 
 base_url='http://127.0.0.1:9080'
+me_url="${base_url}/api/v1/me"
 identity_webhook_url="${base_url}/api/v1/identity/webhooks/clerk"
 organization_webhook_url="${base_url}/api/v1/organizations/webhooks/clerk"
 current_url="${base_url}/api/v1/organizations/current"
@@ -90,6 +91,18 @@ assert_status() {
   test "${actual}" = "${expected}"
 }
 
+assert_actor_mutations_forbidden() {
+  local token_file="$1" prefix="$2" target_membership_id="$3"
+  assert_status "$(request_json POST "${business_email_url}" "${token_file}" "${prefix}-business" '{}' "${work}/${prefix}-business-body" "${work}/${prefix}-business-headers")" "403"
+  assert_status "$(request_json POST "${invitation_url}" "${token_file}" "${prefix}-invite" '{"email":"blocked-pending@company.example","application_role":"viewer"}' "${work}/${prefix}-invite-body" "${work}/${prefix}-invite-headers")" "403"
+  assert_status "$(request_json PATCH "${current_url}/members/${target_membership_id}/role" "${token_file}" "${prefix}-role" '{"application_role":"recruiter"}' "${work}/${prefix}-role-body" "${work}/${prefix}-role-headers")" "403"
+  assert_status "$(request_json POST "${transfer_url}" "${token_file}" "${prefix}-transfer" "{\"target_membership_id\":\"${target_membership_id}\"}" "${work}/${prefix}-transfer-body" "${work}/${prefix}-transfer-headers")" "403"
+  assert_status "$(request_json DELETE "${current_url}/members/${target_membership_id}" "${token_file}" "${prefix}-remove" '' "${work}/${prefix}-remove-body" "${work}/${prefix}-remove-headers")" "403"
+  for body in "${work}/${prefix}"-*-body; do
+    grep --quiet '"code":"membership_required"' "${body}"
+  done
+}
+
 assert_no_sensitive_logs() {
   docker compose logs --no-color organization-service > "${work}/organization-service.log"
   docker logs "${mock_name}" > "${work}/provider.log" 2>&1 || true
@@ -98,8 +111,10 @@ import pathlib, sys
 text='\n'.join(pathlib.Path(p).read_text(encoding='utf-8') for p in sys.argv[1:])
 for forbidden in [
     'owner@Acme.Example', 'admin@acme.example', 'viewer@acme.example',
+    'owner@company-a.example', 'owner@company-b.example', 'owner@company-c.example',
     'recruiter@acme.example', 'delivery@acme.example', 'personal@gmail.com',
-    'creator-rejoin@company.example',
+    'creator-rejoin@company.example', 'cross-intent@company.example',
+    'blocked-pending@company.example',
     'user_pr3_', 'org_pr3_', 'mem_pr3_',
     'sk_test_bridgeworks_local_membership_administration',
     'svix-signature', 'postgres://', 'Authorization: Bearer',
@@ -173,7 +188,7 @@ test "$(organization_sql "select application_role from organization.memberships 
 sign_token user_pr3_owner sess_pr3_owner org_pr3_main "${auth_work}/pr3-owner.token"
 sign_token user_pr3_admin sess_pr3_admin org_pr3_main "${auth_work}/pr3-admin.token"
 
-# Business-email proof is a point-in-time verified Identity domain proof, separate from company verification_status.
+# Initial point-in-time business-email proof is separate from company verification_status.
 assert_status "$(request_json POST "${business_email_url}" "${auth_work}/pr3-owner.token" pr3-business-owner '{}' "${work}/business-owner-body" "${work}/business-owner-headers")" "200"
 python3 - "${work}/business-owner-body" <<'PY'
 import json, sys
@@ -247,6 +262,37 @@ assert_status "$(request_json PATCH "${current_url}/members/${viewer_membership_
 test "$(organization_sql "select count(*) from organization.memberships where organization_id=(select id from organization.organizations where clerk_organization_id='org_pr3_main') and status='active' and application_role='owner'")" = "2"
 assert_status "$(request_json PATCH "${current_url}/members/${admin_membership_id}/role" "${auth_work}/pr3-owner.token" pr3-role-invalid '{"application_role":"super_owner"}' "${work}/role-invalid-body" "${work}/role-invalid-headers")" "400"
 
+# Real email-change/re-verification regression on an active local owner.
+cat > "${work}/identity-viewer-company-a.json" <<'JSON'
+{"type":"user.updated","timestamp":1785750023000,"data":{"id":"user_pr3_viewer","primary_email_address_id":"email_pr3_viewer_a","email_addresses":[{"id":"email_pr3_viewer_a","email_address":"owner@company-a.example","verification":{"status":"verified"}}]}}
+JSON
+assert_status "$(send_signed "${identity_webhook_url}" "${CLERK_WEBHOOK_SIGNING_SECRET}" msg_pr3_identity_viewer_company_a "${work}/identity-viewer-company-a.json" "${work}/identity-viewer-company-a-response" pr3-identity-viewer-company-a)" "204|pr3-identity-viewer-company-a"
+assert_status "$(request_json GET "${me_url}" "${auth_work}/pr3-viewer.token" pr3-viewer-me '' "${work}/viewer-me-body" "${work}/viewer-me-headers")" "200"
+viewer_identity_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${work}/viewer-me-body")"
+assert_status "$(request_json POST "${business_email_url}" "${auth_work}/pr3-viewer.token" pr3-business-company-a '{}' "${work}/business-company-a-body" "${work}/business-company-a-headers")" "200"
+proof_a_at="$(organization_sql "select business_email_verified_at::text from organization.organizations where clerk_organization_id='org_pr3_main'")"
+test "$(organization_sql "select business_email_domain, business_email_verified_by_user_id::text, verification_status from organization.organizations where clerk_organization_id='org_pr3_main'")" = "company-a.example|${viewer_identity_id}|unverified"
+
+cat > "${work}/identity-viewer-company-b.json" <<'JSON'
+{"type":"user.updated","timestamp":1785750024000,"data":{"id":"user_pr3_viewer","primary_email_address_id":"email_pr3_viewer_b","email_addresses":[{"id":"email_pr3_viewer_b","email_address":"owner@company-b.example","verification":{"status":"verified"}}]}}
+JSON
+assert_status "$(send_signed "${identity_webhook_url}" "${CLERK_WEBHOOK_SIGNING_SECRET}" msg_pr3_identity_viewer_company_b "${work}/identity-viewer-company-b.json" "${work}/identity-viewer-company-b-response" pr3-identity-viewer-company-b)" "204|pr3-identity-viewer-company-b"
+test "$(organization_sql "select business_email_domain, business_email_verified_at::text from organization.organizations where clerk_organization_id='org_pr3_main'")" = "company-a.example|${proof_a_at}"
+
+assert_status "$(request_json POST "${business_email_url}" "${auth_work}/pr3-viewer.token" pr3-business-company-b '{}' "${work}/business-company-b-body" "${work}/business-company-b-headers")" "200"
+grep --quiet '"domain":"company-b.example"' "${work}/business-company-b-body"
+proof_b_at="$(organization_sql "select business_email_verified_at::text from organization.organizations where clerk_organization_id='org_pr3_main'")"
+test "${proof_b_at}" != "${proof_a_at}"
+test "$(organization_sql "select business_email_domain, business_email_verified_by_user_id::text, verification_status from organization.organizations where clerk_organization_id='org_pr3_main'")" = "company-b.example|${viewer_identity_id}|unverified"
+
+cat > "${work}/identity-viewer-no-verified.json" <<'JSON'
+{"type":"user.updated","timestamp":1785750025000,"data":{"id":"user_pr3_viewer","primary_email_address_id":"email_pr3_viewer_c","email_addresses":[{"id":"email_pr3_viewer_c","email_address":"owner@company-c.example","verification":{"status":"unverified"}}]}}
+JSON
+assert_status "$(send_signed "${identity_webhook_url}" "${CLERK_WEBHOOK_SIGNING_SECRET}" msg_pr3_identity_viewer_no_verified "${work}/identity-viewer-no-verified.json" "${work}/identity-viewer-no-verified-response" pr3-identity-viewer-no-verified)" "204|pr3-identity-viewer-no-verified"
+assert_status "$(request_json POST "${business_email_url}" "${auth_work}/pr3-viewer.token" pr3-business-no-verified '{}' "${work}/business-no-verified-body" "${work}/business-no-verified-headers")" "409"
+grep --quiet '"code":"verified_primary_email_required"' "${work}/business-no-verified-body"
+test "$(organization_sql "select business_email_domain, business_email_verified_at::text from organization.organizations where clerk_organization_id='org_pr3_main'")" = "company-b.example|${proof_b_at}"
+
 # Foreign membership IDs never escape the actor organization boundary.
 cat > "${work}/identity-foreign.json" <<'JSON'
 {"type":"user.created","timestamp":1785750030000,"data":{"id":"user_pr3_foreign","primary_email_address_id":"email_pr3_foreign","email_addresses":[{"id":"email_pr3_foreign","email_address":"foreign@other.example","verification":{"status":"verified"}}]}}
@@ -261,6 +307,17 @@ JSON
 assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_pr3_org_foreign "${work}/org-foreign.json" "${work}/org-foreign-response" pr3-org-foreign)" "204|pr3-org-foreign"
 assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_pr3_mem_foreign "${work}/mem-foreign.json" "${work}/mem-foreign-response" pr3-mem-foreign)" "204|pr3-mem-foreign"
 foreign_membership_id="$(organization_sql "select id from organization.memberships where clerk_membership_id='mem_pr3_foreign'")"
+
+# A pending intent from Org A cannot grant its local role to a signed membership projection in Org B.
+assert_status "$(request_json POST "${invitation_url}" "${auth_work}/pr3-owner.token" pr3-cross-intent-create '{"email":"cross-intent@company.example","application_role":"delivery_manager"}' "${work}/cross-intent-create-body" "${work}/cross-intent-create-headers")" "202"
+cross_intent_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${work}/cross-intent-create-body")"
+cat > "${work}/mem-cross-intent.json" <<JSON
+{"type":"organizationMembership.created","timestamp":1785750033000,"data":{"id":"mem_pr3_cross_intent","organization":{"id":"org_pr3_foreign"},"public_user_data":{"user_id":"user_pr3_delivery"},"role":"org:member","public_metadata":{"bridgeworks_invitation_id":"${cross_intent_id}"}}}
+JSON
+assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_pr3_mem_cross_intent "${work}/mem-cross-intent.json" "${work}/mem-cross-intent-response" pr3-mem-cross-intent)" "204|pr3-mem-cross-intent"
+test "$(organization_sql "select application_role from organization.memberships where clerk_membership_id='mem_pr3_cross_intent'")" = "viewer"
+test "$(organization_sql "select consumed_at is null from organization.membership_invitation_intents where id='${cross_intent_id}'")" = "t"
+
 assert_status "$(request_json PATCH "${current_url}/members/${foreign_membership_id}/role" "${auth_work}/pr3-owner.token" pr3-cross-role '{"application_role":"viewer"}' "${work}/cross-role-body" "${work}/cross-role-headers")" "404"
 assert_status "$(request_json DELETE "${current_url}/members/${foreign_membership_id}" "${auth_work}/pr3-owner.token" pr3-cross-remove '' "${work}/cross-remove-body" "${work}/cross-remove-headers")" "404"
 assert_status "$(request_json POST "${transfer_url}" "${auth_work}/pr3-owner.token" pr3-cross-transfer "{\"target_membership_id\":\"${foreign_membership_id}\"}" "${work}/cross-transfer-body" "${work}/cross-transfer-headers")" "404"
@@ -295,7 +352,6 @@ JSON
 assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_pr3_mem_transfer "${work}/mem-transfer.json" "${work}/mem-transfer-response" pr3-mem-transfer)" "204|pr3-mem-transfer"
 transfer_membership_id="$(organization_sql "select id from organization.memberships where clerk_membership_id='mem_pr3_transfer'")"
 assert_status "$(request_json POST "${transfer_url}" "${auth_work}/pr3-last.token" pr3-transfer "{\"target_membership_id\":\"${transfer_membership_id}\"}" "${work}/transfer-body" "${work}/transfer-headers")" "204"
-test "$(organization_sql "select string_agg(application_role, ',' order by id::text) from organization.memberships where organization_id=(select id from organization.organizations where clerk_organization_id='org_pr3_last') and status='active'")" != ""
 test "$(organization_sql "select count(*) from organization.memberships where organization_id=(select id from organization.organizations where clerk_organization_id='org_pr3_last') and status='active' and application_role='owner'")" = "1"
 test "$(organization_sql "select application_role from organization.memberships where id='${last_membership_id}'")" = "admin"
 test "$(organization_sql "select application_role from organization.memberships where id='${transfer_membership_id}'")" = "owner"
@@ -304,7 +360,8 @@ test "$(organization_sql "select application_role from organization.memberships 
 assert_status "$(request_json DELETE "${current_url}/membership" "${auth_work}/pr3-owner.token" pr3-owner-leave '' "${work}/owner-leave-body" "${work}/owner-leave-headers")" "202"
 test "$(organization_sql "select count(*) from organization.membership_removal_intents where membership_id='${owner_membership_id}'")" = "1"
 test "$(organization_sql "select status from organization.memberships where id='${owner_membership_id}'")" = "active"
-assert_status "$(request_json GET "${current_url}/membership" "${auth_work}/pr3-owner.token" pr3-owner-after-leave '' "${work}/owner-after-leave-body" "${work}/owner-after-leave-headers")" "403"
+assert_actor_mutations_forbidden "${auth_work}/pr3-owner.token" pr3-removal-pending "${admin_membership_id}"
+
 cat > "${work}/mem-owner-deleted.json" <<'JSON'
 {"type":"organizationMembership.deleted","timestamp":1785750050000,"data":{"id":"mem_pr3_owner","organization":{"id":"org_pr3_main"},"public_user_data":{"user_id":"user_pr3_owner"},"role":"org:admin"}}
 JSON
@@ -312,6 +369,7 @@ assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION
 test "$(organization_sql "select status from organization.memberships where id='${owner_membership_id}'")" = "deleted"
 test "$(organization_sql "select count(*) from organization.membership_removal_intents where membership_id='${owner_membership_id}'")" = "0"
 test "$(organization_sql "select count(*) from organization.memberships where organization_id=(select id from organization.organizations where clerk_organization_id='org_pr3_main') and status='active' and application_role='owner'")" = "1"
+assert_actor_mutations_forbidden "${auth_work}/pr3-owner.token" pr3-deleted-actor "${admin_membership_id}"
 
 # Historical creator deleted before bootstrap stays permanently ineligible when invited with a fresh membership ID.
 cat > "${work}/identity-rejoin-creator.json" <<'JSON'
@@ -349,18 +407,17 @@ JSON
 assert_status "$(send_signed "${organization_webhook_url}" "${CLERK_ORGANIZATION_WEBHOOK_SIGNING_SECRET}" msg_pr3_rejoin_new_created "${work}/rejoin-new-created.json" "${work}/rejoin-new-created-response" pr3-rejoin-new-created)" "204|pr3-rejoin-new-created"
 test "$(organization_sql "select m.application_role, o.owner_bootstrap_eligible, o.owner_bootstrapped, (select count(*) from organization.memberships owners where owners.organization_id=o.id and owners.status='active' and owners.application_role='owner') from organization.organizations o join organization.memberships m on m.organization_id=o.id and m.clerk_membership_id='mem_pr3_rejoin_new' where o.clerk_organization_id='org_pr3_rejoin'")" = "viewer|f|f|0"
 
-# Current verified email may change; a new command reads current Identity and replaces the timestamped domain proof.
+# An unrelated Identity update never silently mutates the explicit historical Organization proof.
 cat > "${work}/identity-owner-updated.json" <<'JSON'
 {"type":"user.updated","timestamp":1785750070000,"data":{"id":"user_pr3_owner","primary_email_address_id":"email_pr3_owner_new","email_addresses":[{"id":"email_pr3_owner_new","email_address":"owner@newco.example","verification":{"status":"verified"}}]}}
 JSON
 assert_status "$(send_signed "${identity_webhook_url}" "${CLERK_WEBHOOK_SIGNING_SECRET}" msg_pr3_identity_owner_updated "${work}/identity-owner-updated.json" "${work}/identity-owner-updated-response" pr3-identity-owner-updated)" "204|pr3-identity-owner-updated"
-# owner left earlier and is no longer authorized; use the remaining owner membership to prove role authority remains local.
 sign_token user_pr3_viewer sess_pr3_remaining_owner org_pr3_main "${auth_work}/pr3-remaining-owner.token"
 assert_status "$(request_json GET "${current_url}" "${auth_work}/pr3-remaining-owner.token" pr3-current-read '' "${work}/current-read-body" "${work}/current-read-headers")" "200"
 python3 - "${work}/current-read-body" <<'PY'
 import json, sys
 body=json.load(open(sys.argv[1], encoding='utf-8'))
-assert body['business_email_domain']=='acme.example'
+assert body['business_email_domain']=='company-b.example'
 assert body['business_email_verified_at']
 assert 'business_email_verified_by_user_id' not in body
 assert all('clerk' not in key for key in body)
