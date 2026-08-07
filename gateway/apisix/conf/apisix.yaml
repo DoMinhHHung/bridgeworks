@@ -181,6 +181,25 @@ routes:
       timeout: { connect: 1, send: 5, read: 5 }
       nodes: { "organization-service:8080": 1 }
 
+  - id: bridgeworks-organization-current-audit-events
+    name: bridgeworks-organization-current-audit-events
+    uri: /api/v1/organizations/current/audit-events
+    methods: [GET, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /organizations/current/audit-events }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
   - id: bridgeworks-organization-current-membership
     name: bridgeworks-organization-current-membership
     uri: /api/v1/organizations/current/membership
@@ -254,6 +273,45 @@ routes:
         max_age: 600
         allow_credential: false
       proxy-rewrite: { uri: /organizations/current/ownership-transfer }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-platform-organization-verification-queue
+    name: bridgeworks-platform-organization-verification-queue
+    uri: /api/v1/platform/organizations/verification-queue
+    methods: [GET, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite: { uri: /platform/organizations/verification-queue }
+    upstream:
+      type: roundrobin
+      timeout: { connect: 1, send: 5, read: 5 }
+      nodes: { "organization-service:8080": 1 }
+
+  - id: bridgeworks-platform-organization-verification-decision
+    name: bridgeworks-platform-organization-verification-decision
+    uri: /api/v1/platform/organizations/*/verification-decisions
+    methods: [POST, OPTIONS]
+    plugins:
+      request-id: { header_name: X-Request-Id, include_in_response: true, algorithm: uuid }
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: "POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,X-Request-Id"
+        expose_headers: "X-Request-Id,Retry-After,WWW-Authenticate"
+        max_age: 600
+        allow_credential: false
+      proxy-rewrite:
+        regex_uri: ["^/api/v1/platform/organizations/(.*)/verification-decisions$", "/platform/organizations/$1/verification-decisions"]
     upstream:
       type: roundrobin
       timeout: { connect: 1, send: 5, read: 5 }
