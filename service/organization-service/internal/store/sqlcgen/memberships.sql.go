@@ -14,10 +14,15 @@ import (
 const getActiveMembershipByOrganizationUser = `-- name: GetActiveMembershipByOrganizationUser :one
 SELECT id, clerk_membership_id, organization_id, clerk_user_id, clerk_role,
        application_role, status, created_at, updated_at
-FROM organization.memberships
+FROM organization.memberships m
 WHERE organization_id = $1
   AND clerk_user_id = $2
   AND status = 'active'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM organization.membership_removal_intents r
+      WHERE r.membership_id = m.id
+  )
 `
 
 type GetActiveMembershipByOrganizationUserParams struct {
