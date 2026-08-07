@@ -101,9 +101,10 @@ func (s *Service) applyOrganizationEvent(ctx context.Context, uow UnitOfWork, ev
 				return err
 			}
 			return wrapPersistence("insert deleted organization tombstone", uow.InsertOrganization(ctx, Organization{
-				ID:                  id,
-				ClerkOrganizationID: event.ClerkOrganizationID,
-				Status:              "deleted",
+				ID:                     id,
+				ClerkOrganizationID:    event.ClerkOrganizationID,
+				Status:                 "deleted",
+				OwnerBootstrapEligible: true,
 			}))
 		}
 		if existing.Status == "deleted" {
@@ -118,12 +119,13 @@ func (s *Service) applyOrganizationEvent(ctx context.Context, uow UnitOfWork, ev
 			return err
 		}
 		existing = Organization{
-			ID:                   id,
-			ClerkOrganizationID:  event.ClerkOrganizationID,
-			Name:                 event.Organization.Name,
-			Slug:                 event.Organization.Slug,
-			Status:               "active",
-			ClerkCreatedByUserID: event.Organization.CreatedBy,
+			ID:                     id,
+			ClerkOrganizationID:    event.ClerkOrganizationID,
+			Name:                   event.Organization.Name,
+			Slug:                   event.Organization.Slug,
+			Status:                 "active",
+			ClerkCreatedByUserID:   event.Organization.CreatedBy,
+			OwnerBootstrapEligible: true,
 		}
 		if err := uow.InsertOrganization(ctx, existing); err != nil {
 			return safeerr.Wrap("insert organization projection", err)
@@ -179,9 +181,10 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 			return err
 		}
 		organization = Organization{
-			ID:                  id,
-			ClerkOrganizationID: event.ClerkOrganizationID,
-			Status:              "pending",
+			ID:                     id,
+			ClerkOrganizationID:    event.ClerkOrganizationID,
+			Status:                 "pending",
+			OwnerBootstrapEligible: true,
 		}
 		if err := uow.InsertOrganization(ctx, organization); err != nil {
 			return safeerr.Wrap("insert pending organization projection", err)
@@ -259,7 +262,7 @@ func (s *Service) applyMembershipEvent(ctx context.Context, uow UnitOfWork, even
 }
 
 func (s *Service) bootstrapInitialOwner(ctx context.Context, uow UnitOfWork, organization Organization) error {
-	if organization.OwnerBootstrapped || organization.ClerkCreatedByUserID == nil {
+	if !organization.OwnerBootstrapEligible || organization.OwnerBootstrapped || organization.Status != "active" || organization.ClerkCreatedByUserID == nil {
 		return nil
 	}
 	creatorID := *organization.ClerkCreatedByUserID
@@ -267,29 +270,16 @@ func (s *Service) bootstrapInitialOwner(ctx context.Context, uow UnitOfWork, org
 	if err != nil {
 		return safeerr.Wrap("load creator membership for owner bootstrap", err)
 	}
-	if found {
-		if membership.ApplicationRole != RoleOwner {
-			if err := uow.UpdateMembershipApplicationRole(ctx, membership.ID, RoleOwner); err != nil {
-				return safeerr.Wrap("bootstrap organization owner role", err)
-			}
-		}
-		if err := uow.MarkOrganizationOwnerBootstrapped(ctx, organization.ID); err != nil {
-			return safeerr.Wrap("mark organization owner bootstrapped", err)
-		}
+	if !found {
 		return nil
 	}
-
-	hasMembership, err := uow.HasMembership(ctx, organization.ID, creatorID)
-	if err != nil {
-		return safeerr.Wrap("check creator membership history", err)
+	if membership.ApplicationRole != RoleOwner {
+		if err := uow.UpdateMembershipApplicationRole(ctx, membership.ID, RoleOwner); err != nil {
+			return safeerr.Wrap("bootstrap organization owner role", err)
+		}
 	}
-	if !hasMembership {
-		return nil
-	}
-	// A creator membership was projected but is no longer active. Consume the
-	// one-time bootstrap signal rather than granting owner on a future rejoin.
 	if err := uow.MarkOrganizationOwnerBootstrapped(ctx, organization.ID); err != nil {
-		return safeerr.Wrap("complete inactive creator owner bootstrap", err)
+		return safeerr.Wrap("mark organization owner bootstrapped", err)
 	}
 	return nil
 }
