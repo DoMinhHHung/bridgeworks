@@ -24,8 +24,6 @@ create table organization.membership_invitation_intents (
     organization_id uuid not null,
     application_role text not null,
     created_by_identity_user_id uuid not null,
-    provider_invitation_id text,
-    provider_confirmed_at timestamptz,
     consumed_membership_id uuid,
     consumed_at timestamptz,
     created_at timestamptz not null default now(),
@@ -37,16 +35,6 @@ create table organization.membership_invitation_intents (
         foreign key (organization_id) references organization.organizations (id),
     constraint membership_invitation_intents_role_fk
         foreign key (application_role) references organization.roles (key),
-    constraint membership_invitation_intents_provider_id_uq
-        unique (provider_invitation_id),
-    constraint membership_invitation_intents_provider_id_not_blank_ck
-        check (provider_invitation_id is null or btrim(provider_invitation_id) <> ''),
-    constraint membership_invitation_intents_provider_confirmation_ck
-        check (
-            (provider_invitation_id is null and provider_confirmed_at is null)
-            or
-            (provider_invitation_id is not null and provider_confirmed_at is not null)
-        ),
     constraint membership_invitation_intents_consumption_ck
         check (
             (consumed_membership_id is null and consumed_at is null)
