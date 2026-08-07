@@ -14,7 +14,7 @@ import (
 const getOrganizationByClerkID = `-- name: GetOrganizationByClerkID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 FROM organization.organizations
 WHERE clerk_organization_id = $1
 `
@@ -38,6 +38,7 @@ func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizatio
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -48,7 +49,7 @@ INSERT INTO organization.organizations (
 ) VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 type InsertOrganizationParams struct {
@@ -86,6 +87,7 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -93,7 +95,7 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 const lockOrganizationByID = `-- name: LockOrganizationByID :one
 SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
        legal_name, website, country, company_type, verification_status, trust_status,
-       clerk_created_by_user_id, owner_bootstrapped
+       clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 FROM organization.organizations
 WHERE id = $1
 FOR UPDATE
@@ -118,6 +120,7 @@ func (q *Queries) LockOrganizationByID(ctx context.Context, id uuid.UUID) (Organ
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -130,7 +133,7 @@ SET name = NULL,
 WHERE clerk_organization_id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
@@ -152,6 +155,7 @@ func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganization
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -160,7 +164,9 @@ const markOrganizationOwnerBootstrapped = `-- name: MarkOrganizationOwnerBootstr
 UPDATE organization.organizations
 SET owner_bootstrapped = true
 WHERE id = $1
+  AND owner_bootstrap_eligible = true
   AND owner_bootstrapped = false
+  AND status = 'active'
   AND clerk_created_by_user_id IS NOT NULL
 `
 
@@ -176,7 +182,7 @@ WHERE clerk_organization_id = $1
   AND clerk_created_by_user_id IS NULL
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 type SetOrganizationCreatorParams struct {
@@ -203,6 +209,7 @@ func (q *Queries) SetOrganizationCreator(ctx context.Context, arg SetOrganizatio
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -216,7 +223,7 @@ SET legal_name = $2,
 WHERE id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 type UpdateOrganizationProductProfileParams struct {
@@ -252,6 +259,7 @@ func (q *Queries) UpdateOrganizationProductProfile(ctx context.Context, arg Upda
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
@@ -287,7 +295,7 @@ SET verification_status = $2
 WHERE id = $1
 RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
           legal_name, website, country, company_type, verification_status, trust_status,
-          clerk_created_by_user_id, owner_bootstrapped
+          clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 `
 
 type UpdateOrganizationVerificationStatusParams struct {
@@ -314,6 +322,7 @@ func (q *Queries) UpdateOrganizationVerificationStatus(ctx context.Context, arg 
 		&i.TrustStatus,
 		&i.ClerkCreatedByUserID,
 		&i.OwnerBootstrapped,
+		&i.OwnerBootstrapEligible,
 	)
 	return i, err
 }
