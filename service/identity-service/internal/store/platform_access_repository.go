@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platform/safeerr"
 	"github.com/DoMinhHHung/bridgeworks/service/identity-service/internal/platformaccess"
@@ -114,5 +113,3 @@ func (r *Repository) GetPlatformAccessAssignment(
 	}
 	return assignment, true, nil
 }
-
-var _ = time.Time{}
