@@ -186,7 +186,7 @@ func (u *unitOfWork) UpdateOrganizationProjection(
 func (u *unitOfWork) SetOrganizationCreator(ctx context.Context, clerkOrganizationID, clerkUserID string) error {
 	_, err := u.queries.SetOrganizationCreator(ctx, sqlcgen.SetOrganizationCreatorParams{
 		ClerkOrganizationID:  clerkOrganizationID,
-		ClerkCreatedByUserID: clerkUserID,
+		ClerkCreatedByUserID: &clerkUserID,
 	})
 	return err
 }
