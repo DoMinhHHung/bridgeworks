@@ -10,6 +10,7 @@ const (
 	PermissionOrganizationRead          = "organization.read"
 	PermissionOrganizationManage        = "organization.manage"
 	PermissionOrganizationVerifyRequest = "organization.verify.request"
+	PermissionOrganizationAuditRead     = "organization.audit.read"
 	PermissionMembershipRead            = "membership.read"
 	PermissionMembershipInvite          = "membership.invite"
 	PermissionMembershipManage          = "membership.manage"
