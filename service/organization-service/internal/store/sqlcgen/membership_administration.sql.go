@@ -35,15 +35,11 @@ WHERE organization_id = $1
 type ConsumeMembershipInvitationIntentParams struct {
 	OrganizationID       uuid.UUID
 	ID                   uuid.UUID
-	ConsumedMembershipID *uuid.UUID
+	ConsumedMembershipID pgtype.UUID
 }
 
 func (q *Queries) ConsumeMembershipInvitationIntent(ctx context.Context, arg ConsumeMembershipInvitationIntentParams) error {
-	_, err := q.db.Exec(ctx, consumeMembershipInvitationIntent,
-		arg.OrganizationID,
-		arg.ID,
-		arg.ConsumedMembershipID,
-	)
+	_, err := q.db.Exec(ctx, consumeMembershipInvitationIntent, arg.OrganizationID, arg.ID, arg.ConsumedMembershipID)
 	return err
 }
 
@@ -200,11 +196,7 @@ type InsertMembershipRemovalIntentParams struct {
 }
 
 func (q *Queries) InsertMembershipRemovalIntent(ctx context.Context, arg InsertMembershipRemovalIntentParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertMembershipRemovalIntent,
-		arg.MembershipID,
-		arg.OrganizationID,
-		arg.RequestedByIdentityUserID,
-	)
+	row := q.db.QueryRow(ctx, insertMembershipRemovalIntent, arg.MembershipID, arg.OrganizationID, arg.RequestedByIdentityUserID)
 	var membership_id uuid.UUID
 	err := row.Scan(&membership_id)
 	return membership_id, err
@@ -275,10 +267,6 @@ type UpdateMembershipApplicationRoleByOrganizationParams struct {
 }
 
 func (q *Queries) UpdateMembershipApplicationRoleByOrganization(ctx context.Context, arg UpdateMembershipApplicationRoleByOrganizationParams) error {
-	_, err := q.db.Exec(ctx, updateMembershipApplicationRoleByOrganization,
-		arg.OrganizationID,
-		arg.ID,
-		arg.ApplicationRole,
-	)
+	_, err := q.db.Exec(ctx, updateMembershipApplicationRoleByOrganization, arg.OrganizationID, arg.ID, arg.ApplicationRole)
 	return err
 }
