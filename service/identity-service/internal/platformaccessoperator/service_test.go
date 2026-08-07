@@ -11,14 +11,14 @@ import (
 )
 
 type repositoryStub struct {
-	user           User
-	foundUser      bool
-	userErr        error
-	assignment     Assignment
+	user            User
+	foundUser       bool
+	userErr         error
+	assignment      Assignment
 	foundAssignment bool
-	assignmentErr  error
-	grantCalls     int
-	revokeCalls    int
+	assignmentErr   error
+	grantCalls      int
+	revokeCalls     int
 }
 
 func (r *repositoryStub) GetPlatformAccessUserByIDUser(context.Context, string) (User, bool, error) {
@@ -40,9 +40,9 @@ func TestGrantRequiresActiveExistingLocalUser(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name  string
-		repo  *repositoryStub
-		want  error
+		name string
+		repo *repositoryStub
+		want error
 	}{
 		{name: "missing", repo: &repositoryStub{}, want: ErrUserNotFound},
 		{name: "disabled", repo: &repositoryStub{user: User{ID: uuid.New(), Status: "disabled"}, foundUser: true}, want: ErrUserInactive},
@@ -66,9 +66,9 @@ func TestGrantRevokeAndStatusUseOnlyPlatformAdmin(t *testing.T) {
 
 	now := time.Now().UTC()
 	repo := &repositoryStub{
-		user:      User{ID: uuid.New(), Status: "active"},
-		foundUser: true,
-		assignment: Assignment{GrantedAt: now, UpdatedAt: now},
+		user:            User{ID: uuid.New(), Status: "active"},
+		foundUser:       true,
+		assignment:      Assignment{GrantedAt: now, UpdatedAt: now},
 		foundAssignment: true,
 	}
 	service := New(repo)
