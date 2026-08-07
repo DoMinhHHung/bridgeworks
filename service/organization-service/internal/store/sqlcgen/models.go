@@ -39,4 +39,10 @@ type OrganizationOrganization struct {
 	Status              string
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	LegalName           *string
+	Website             *string
+	Country             *string
+	CompanyType         *string
+	VerificationStatus  string
+	TrustStatus         string
 }

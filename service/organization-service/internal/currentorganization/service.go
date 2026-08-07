@@ -26,10 +26,16 @@ type Identity struct {
 }
 
 type Organization struct {
-	ID     uuid.UUID
-	Name   *string
-	Slug   *string
-	Status string
+	ID                 uuid.UUID
+	Name               *string
+	Slug               *string
+	Status             string
+	LegalName          *string
+	Website            *string
+	Country            *string
+	CompanyType        *string
+	VerificationStatus string
+	TrustStatus        string
 }
 
 type Membership struct {

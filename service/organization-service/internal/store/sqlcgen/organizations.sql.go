@@ -12,7 +12,8 @@ import (
 )
 
 const getOrganizationByClerkID = `-- name: GetOrganizationByClerkID :one
-SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at
+SELECT id, clerk_organization_id, name, slug, status, created_at, updated_at,
+       legal_name, website, country, company_type, verification_status, trust_status
 FROM organization.organizations
 WHERE clerk_organization_id = $1
 `
@@ -28,6 +29,12 @@ func (q *Queries) GetOrganizationByClerkID(ctx context.Context, clerkOrganizatio
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
 	)
 	return i, err
 }
@@ -36,7 +43,8 @@ const insertOrganization = `-- name: InsertOrganization :one
 INSERT INTO organization.organizations (
     id, clerk_organization_id, name, slug, status
 ) VALUES ($1, $2, $3, $4, $5)
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status
 `
 
 type InsertOrganizationParams struct {
@@ -64,6 +72,12 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
 	)
 	return i, err
 }
@@ -74,7 +88,8 @@ SET name = NULL,
     slug = NULL,
     status = 'deleted'
 WHERE clerk_organization_id = $1
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status
 `
 
 func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganizationID string) (OrganizationOrganization, error) {
@@ -88,6 +103,12 @@ func (q *Queries) MarkOrganizationDeleted(ctx context.Context, clerkOrganization
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
 	)
 	return i, err
 }
@@ -98,7 +119,8 @@ SET name = $2,
     slug = $3,
     status = $4
 WHERE clerk_organization_id = $1
-RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at
+RETURNING id, clerk_organization_id, name, slug, status, created_at, updated_at,
+          legal_name, website, country, company_type, verification_status, trust_status
 `
 
 type UpdateOrganizationProjectionParams struct {
@@ -124,6 +146,12 @@ func (q *Queries) UpdateOrganizationProjection(ctx context.Context, arg UpdateOr
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LegalName,
+		&i.Website,
+		&i.Country,
+		&i.CompanyType,
+		&i.VerificationStatus,
+		&i.TrustStatus,
 	)
 	return i, err
 }
