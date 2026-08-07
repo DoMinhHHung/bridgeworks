@@ -88,7 +88,7 @@ INSERT INTO organization.membership_removal_intents (
 ON CONFLICT (membership_id) DO NOTHING
 RETURNING membership_id;
 
--- name: DeleteMembershipRemovalIntent :exec
+-- name: DeleteMembershipRemovalIntent :execrows
 DELETE FROM organization.membership_removal_intents
 WHERE organization_id = $1
   AND membership_id = $2;
