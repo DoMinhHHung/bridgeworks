@@ -14,6 +14,7 @@ type RouterConfig struct {
 	ClerkWebhookProcessTimeout time.Duration
 	ClerkWebhookMaxBodyBytes   int64
 	Metrics                    Metrics
+	PlatformAccess             PlatformAccessResolver
 }
 
 func NewRouter(
@@ -24,7 +25,6 @@ func NewRouter(
 	clerkProcessor ClerkWebhookOutcomeProcessor,
 	authenticate func(http.Handler) http.Handler,
 	currentUserGetter CurrentUserGetter,
-	platformAccessResolver PlatformAccessResolver,
 ) http.Handler {
 	if authenticate == nil {
 		authenticate = func(next http.Handler) http.Handler { return next }
@@ -51,7 +51,7 @@ func NewRouter(
 	router.With(currentUserResponseHeaders, authenticate).Get("/me", currentUserHandler(logger, currentUserGetter))
 	router.With(platformAccessResponseHeaders, authenticate).Get(
 		"/internal/v1/platform-access/me",
-		platformAccessHandler(logger, platformAccessResolver),
+		platformAccessHandler(logger, config.PlatformAccess),
 	)
 
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
