@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: BridgeWorks Organization Service API
-  version: 0.1.0
-  description: Organization synchronization, local membership authorization, and current-organization projections exposed through APISIX.
+  version: 0.2.0
+  description: Organization synchronization, BridgeWorks organization product profile, local membership authorization, and current-organization projections exposed through APISIX.
 paths:
   /api/v1/organizations/health/live:
     get:
@@ -34,7 +34,7 @@ paths:
     post:
       summary: Synchronize verified Clerk organization events
       operationId: synchronizeClerkOrganizationWebhook
-      description: Public Svix-signed endpoint. Signature verification occurs on the raw body before narrow decoding.
+      description: Public Svix-signed endpoint. Signature verification occurs on the raw body before narrow decoding. Provider webhooks update only Clerk-owned organization and membership projection fields; BridgeWorks product profile, verification, trust, application roles, and permissions remain locally authoritative.
       responses:
         "204":
           description: Supported event processed, duplicate or stale event retained, or verified unsupported event ignored
@@ -54,7 +54,7 @@ paths:
       security: [{ ClerkSessionToken: [] }]
       responses:
         "200":
-          description: Current active organization
+          description: Current active organization including BridgeWorks-owned product profile and lifecycle projections
           headers:
             X-Request-Id: { $ref: "#/components/headers/RequestID" }
             Cache-Control: { $ref: "#/components/headers/NoStore" }
@@ -183,12 +183,37 @@ components:
     CurrentOrganization:
       type: object
       additionalProperties: false
-      required: [id, name, slug, status]
+      required:
+        - id
+        - name
+        - slug
+        - status
+        - legal_name
+        - website
+        - country
+        - company_type
+        - verification_status
+        - trust_status
       properties:
         id: { type: string, format: uuid }
         name: { type: [string, "null"] }
         slug: { type: [string, "null"] }
-        status: { type: string, const: active }
+        status:
+          type: string
+          const: active
+          description: Provider/application lifecycle. This is separate from verification_status and trust_status.
+        legal_name: { type: [string, "null"] }
+        website: { type: [string, "null"] }
+        country: { type: [string, "null"] }
+        company_type: { type: [string, "null"] }
+        verification_status:
+          type: string
+          enum: [unverified, pending, verified, rejected]
+          description: BridgeWorks company-verification lifecycle. It is not derived from Clerk organization lifecycle.
+        trust_status:
+          type: string
+          const: unassessed
+          description: BridgeWorks trust lifecycle placeholder. Additional trust states are intentionally not defined until a trust/fraud policy is approved.
     CurrentMembership:
       type: object
       additionalProperties: false
@@ -196,7 +221,10 @@ components:
       properties:
         id: { type: string, format: uuid }
         organization_id: { type: string, format: uuid }
-        role: { type: string, enum: [admin, viewer] }
+        role:
+          type: string
+          enum: [owner, admin, recruiter, delivery_manager, viewer]
+          description: BridgeWorks local application role; Clerk role claims are not authorization authority.
         permissions:
           type: array
           items: { type: string }

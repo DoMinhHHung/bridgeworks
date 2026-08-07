@@ -57,7 +57,16 @@ func (r *Repository) GetOrganizationByClerkID(ctx context.Context, clerkOrganiza
 		return currentorganization.Organization{}, false, safeerr.Wrap("get organization projection", err)
 	}
 	return currentorganization.Organization{
-		ID: row.ID, Name: row.Name, Slug: row.Slug, Status: row.Status,
+		ID:                 row.ID,
+		Name:               row.Name,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		LegalName:          row.LegalName,
+		Website:            row.Website,
+		Country:            row.Country,
+		CompanyType:        row.CompanyType,
+		VerificationStatus: row.VerificationStatus,
+		TrustStatus:        row.TrustStatus,
 	}, true, nil
 }
 

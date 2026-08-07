@@ -18,10 +18,16 @@ type CurrentOrganizationResolver interface {
 }
 
 type organizationResponse struct {
-	ID     string  `json:"id"`
-	Name   *string `json:"name"`
-	Slug   *string `json:"slug"`
-	Status string  `json:"status"`
+	ID                 string  `json:"id"`
+	Name               *string `json:"name"`
+	Slug               *string `json:"slug"`
+	Status             string  `json:"status"`
+	LegalName          *string `json:"legal_name"`
+	Website            *string `json:"website"`
+	Country            *string `json:"country"`
+	CompanyType        *string `json:"company_type"`
+	VerificationStatus string  `json:"verification_status"`
+	TrustStatus        string  `json:"trust_status"`
 }
 
 type membershipResponse struct {
@@ -42,8 +48,16 @@ func CurrentOrganization(resolver CurrentOrganizationResolver) http.HandlerFunc 
 			return
 		}
 		writeJSON(w, http.StatusOK, organizationResponse{
-			ID: result.Organization.ID.String(), Name: result.Organization.Name,
-			Slug: result.Organization.Slug, Status: result.Organization.Status,
+			ID:                 result.Organization.ID.String(),
+			Name:               result.Organization.Name,
+			Slug:               result.Organization.Slug,
+			Status:             result.Organization.Status,
+			LegalName:          result.Organization.LegalName,
+			Website:            result.Organization.Website,
+			Country:            result.Organization.Country,
+			CompanyType:        result.Organization.CompanyType,
+			VerificationStatus: result.Organization.VerificationStatus,
+			TrustStatus:        result.Organization.TrustStatus,
 		})
 	}
 }
