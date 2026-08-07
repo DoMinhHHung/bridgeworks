@@ -174,13 +174,12 @@ func (u *unitOfWork) UpdateOrganizationProjection(
 	slug *string,
 	status string,
 ) error {
-	_, err := u.queries.UpdateOrganizationProjection(ctx, sqlcgen.UpdateOrganizationProjectionParams{
+	return u.queries.UpdateOrganizationProjection(ctx, sqlcgen.UpdateOrganizationProjectionParams{
 		ClerkOrganizationID: clerkOrganizationID,
 		Name:                name,
 		Slug:                slug,
 		Status:              status,
 	})
-	return err
 }
 
 func (u *unitOfWork) SetOrganizationCreator(ctx context.Context, clerkOrganizationID, clerkUserID string) error {
