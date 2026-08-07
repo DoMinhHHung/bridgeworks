@@ -20,20 +20,20 @@ const (
 )
 
 var (
-	ErrPermissionDenied        = errors.New("membership administration permission denied")
-	ErrInvalidRole             = errors.New("invalid application role")
-	ErrInvalidEmail            = errors.New("invalid invitation email")
-	ErrMembershipNotFound      = errors.New("membership not found")
-	ErrMembershipInactive      = errors.New("membership inactive")
+	ErrPermissionDenied         = errors.New("membership administration permission denied")
+	ErrInvalidRole              = errors.New("invalid application role")
+	ErrInvalidEmail             = errors.New("invalid invitation email")
+	ErrMembershipNotFound       = errors.New("membership not found")
+	ErrMembershipInactive       = errors.New("membership inactive")
 	ErrMembershipRemovalPending = errors.New("membership removal pending")
-	ErrOwnerMutationForbidden  = errors.New("owner mutation forbidden")
-	ErrLastOwner               = errors.New("last owner operation forbidden")
-	ErrSelfRemoval             = errors.New("use leave operation for self removal")
-	ErrInvalidTransferTarget   = errors.New("invalid ownership transfer target")
-	ErrInvitationConflict      = errors.New("invitation conflict")
-	ErrInvitationRejected      = errors.New("invitation rejected by provider")
-	ErrProviderUnavailable     = errors.New("membership provider unavailable")
-	ErrProviderStateConflict   = errors.New("membership provider state conflict")
+	ErrOwnerMutationForbidden   = errors.New("owner mutation forbidden")
+	ErrLastOwner                = errors.New("last owner operation forbidden")
+	ErrSelfRemoval              = errors.New("use leave operation for self removal")
+	ErrInvalidTransferTarget    = errors.New("invalid ownership transfer target")
+	ErrInvitationConflict       = errors.New("invitation conflict")
+	ErrInvitationRejected       = errors.New("invitation rejected by provider")
+	ErrProviderUnavailable      = errors.New("membership provider unavailable")
+	ErrProviderStateConflict    = errors.New("membership provider state conflict")
 )
 
 // Provider errors are deliberately coarse so Clerk response bodies, trace IDs,
@@ -192,6 +192,9 @@ func (s *Service) SetRole(
 		}
 	}()
 
+	if target.RemovalPending {
+		return ErrMembershipRemovalPending
+	}
 	if err := authorizeRoleMutation(actorMembership, target, role); err != nil {
 		return err
 	}
@@ -404,13 +407,6 @@ func (s *Service) requestRemoval(
 		}
 	}()
 
-	if target.RemovalPending {
-		if err := uow.Commit(ctx); err != nil {
-			return safeerr.Wrap("commit existing membership removal", err)
-		}
-		committed = true
-		return nil
-	}
 	if self {
 		if target.ApplicationRole == RoleOwner {
 			owners, err := uow.CountEffectiveOwners(ctx, actor.OrganizationID)
@@ -442,36 +438,38 @@ func (s *Service) requestRemoval(
 	if !found {
 		return ErrMembershipNotFound
 	}
-	inserted, err := uow.InsertRemovalIntent(ctx, target.ID, actor.OrganizationID, actor.IdentityUserID)
-	if err != nil {
-		return safeerr.Wrap("reserve membership removal", err)
+	if !target.RemovalPending {
+		if _, err := uow.InsertRemovalIntent(ctx, target.ID, actor.OrganizationID, actor.IdentityUserID); err != nil {
+			return safeerr.Wrap("reserve membership removal", err)
+		}
 	}
 	if err := uow.Commit(ctx); err != nil {
 		return safeerr.Wrap("commit membership removal reservation", err)
 	}
 	committed = true
-	if !inserted {
-		return nil
-	}
 
 	providerErr := s.provider.DeleteMembership(ctx, MembershipDeleteProviderRequest{
 		ClerkOrganizationID: organization.ClerkOrganizationID,
 		ClerkUserID:         target.ClerkUserID,
 	})
-	if providerErr == nil {
+	switch {
+	case providerErr == nil, errors.Is(providerErr, ProviderErrNotFound):
+		// Local status remains active only in the provider projection table. The
+		// removal reservation excludes authorization until the signed delete
+		// webhook reconciles and clears the reservation.
 		return nil
-	}
-	if errors.Is(providerErr, ProviderErrUnavailable) {
+	case errors.Is(providerErr, ProviderErrUnavailable):
+		// Keep the reservation. A later identical command retries the provider
+		// delete instead of silently treating the pending state as completed.
+		return ErrProviderUnavailable
+	case errors.Is(providerErr, ProviderErrConflict), errors.Is(providerErr, ProviderErrRejected):
+		if cleanupErr := s.deleteRemovalIntent(ctx, actor.OrganizationID, target.ID); cleanupErr != nil {
+			return cleanupErr
+		}
+		return ErrProviderStateConflict
+	default:
 		return ErrProviderUnavailable
 	}
-	if errors.Is(providerErr, ProviderErrNotFound) || errors.Is(providerErr, ProviderErrConflict) {
-		return ErrProviderStateConflict
-	}
-
-	if cleanupErr := s.deleteRemovalIntent(ctx, actor.OrganizationID, target.ID); cleanupErr != nil {
-		return cleanupErr
-	}
-	return ErrProviderStateConflict
 }
 
 func (s *Service) deleteRemovalIntent(ctx context.Context, organizationID, membershipID uuid.UUID) error {
@@ -576,7 +574,7 @@ func normalizeInvitationEmail(raw string) (string, error) {
 			if r > unicode.MaxASCII || !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
 				return "", ErrInvalidEmail
 			}
-		}
+	}
 	}
 	return local + "@" + domain, nil
 }
