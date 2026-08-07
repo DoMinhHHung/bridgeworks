@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -28,13 +27,13 @@ type command struct {
 
 func main() {
 	bootstrapLogger := platform.NewLogger(os.Stdout, slog.LevelInfo).With("component", "identity-platform-access")
-	if err := run(context.Background(), os.Args[1:], bootstrapLogger); err != nil {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		bootstrapLogger.Error("platform access command failed", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(parent context.Context, args []string, bootstrapLogger *slog.Logger) error {
+func run(parent context.Context, args []string) error {
 	parsed, err := parseCommand(args)
 	if err != nil {
 		return err
@@ -44,9 +43,6 @@ func run(parent context.Context, args []string, bootstrapLogger *slog.Logger) er
 		return err
 	}
 	logger := platform.NewLogger(os.Stdout, cfg.LogLevel).With("component", "identity-platform-access")
-	if bootstrapLogger == nil {
-		bootstrapLogger = logger
-	}
 
 	database, err := postgres.Open(parent, postgres.Config{
 		URL:               cfg.DatabaseURL,
@@ -125,5 +121,3 @@ func validIDUser(value string) bool {
 	}
 	return true
 }
-
-var _ = fmt.Sprintf
