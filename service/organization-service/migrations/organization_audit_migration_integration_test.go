@@ -74,7 +74,7 @@ func seedOrganizationAuditV4State(t *testing.T, ctx context.Context, db *sql.DB)
 			business_email_verified_by_user_id
 		) values ('` + auditMigrationOrganizationID + `', 'org-audit-main', 'Audit Main', 'audit-main', 'active',
 			'Audit Main LLC', 'https://audit.example', 'VN', 'private_company', 'pending', 'unassessed',
-			'user-audit-owner', true, false, 'audit.example', now() - interval '2 days', '` + auditMigrationActorID + `')`,
+			'user-audit-owner', true, true, 'audit.example', now() - interval '2 days', '` + auditMigrationActorID + `')`,
 		`insert into organization.organizations (id, clerk_organization_id, name, status, verification_status, trust_status)
 		 values ('` + auditMigrationVerifiedOrgID + `', 'org-audit-verified', 'Verified', 'active', 'verified', 'unassessed')`,
 		`insert into organization.organizations (id, clerk_organization_id, name, status, verification_status, trust_status)
@@ -112,7 +112,7 @@ func assertOrganizationAuditV4StatePreserved(t *testing.T, ctx context.Context, 
 	`, auditMigrationOrganizationID).Scan(&verification, &trust, &bootstrap, &eligible, &domain); err != nil {
 		t.Fatalf("read preserved organization: %v", err)
 	}
-	if verification != "pending" || trust != "unassessed" || !bootstrap || eligible || domain != "audit.example" {
+	if verification != "pending" || trust != "unassessed" || !bootstrap || !eligible || domain != "audit.example" {
 		t.Fatalf("v5 changed organization state: verification=%q trust=%q bootstrap=%v eligible=%v domain=%q", verification, trust, bootstrap, eligible, domain)
 	}
 	var verified, rejected string
@@ -133,7 +133,11 @@ func assertOrganizationAuditV4StatePreserved(t *testing.T, ctx context.Context, 
 	if err != nil {
 		t.Fatalf("read membership roles: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("close membership role rows: %v", err)
+		}
+	}()
 	var roles []string
 	for rows.Next() {
 		var role string
@@ -141,6 +145,9 @@ func assertOrganizationAuditV4StatePreserved(t *testing.T, ctx context.Context, 
 			t.Fatal(err)
 		}
 		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate membership roles: %v", err)
 	}
 	want := []string{"admin", "owner", "recruiter", "viewer"}
 	if len(roles) != len(want) {
@@ -185,7 +192,11 @@ func assertAuditPermissionMatrix(t *testing.T, ctx context.Context, db *sql.DB) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("close audit permission rows: %v", err)
+		}
+	}()
 	var roles []string
 	for rows.Next() {
 		var role string
@@ -193,6 +204,9 @@ func assertAuditPermissionMatrix(t *testing.T, ctx context.Context, db *sql.DB) 
 			t.Fatal(err)
 		}
 		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate audit permission roles: %v", err)
 	}
 	if len(roles) != 2 || roles[0] != "admin" || roles[1] != "owner" {
 		t.Fatalf("audit permission roles=%v, want [admin owner]", roles)
