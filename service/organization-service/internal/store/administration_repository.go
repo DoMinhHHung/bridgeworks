@@ -7,6 +7,7 @@ import (
 
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/businessverification"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/membershipadmin"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationaudit"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationsync"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/store/sqlcgen"
 	"github.com/google/uuid"
@@ -208,10 +209,11 @@ func (u *membershipAdministrationUnitOfWork) DeleteRemovalIntent(
 	organizationID uuid.UUID,
 	membershipID uuid.UUID,
 ) error {
-	return u.queries.DeleteMembershipRemovalIntent(ctx, sqlcgen.DeleteMembershipRemovalIntentParams{
+	_, err := u.queries.DeleteMembershipRemovalIntent(ctx, sqlcgen.DeleteMembershipRemovalIntentParams{
 		OrganizationID: organizationID,
 		MembershipID:   membershipID,
 	})
+	return err
 }
 
 func (u *membershipAdministrationUnitOfWork) Commit(ctx context.Context) error {
@@ -253,7 +255,7 @@ func (u *unitOfWork) ConsumeInvitationIntent(
 	intentID uuid.UUID,
 	membershipID uuid.UUID,
 ) error {
-	return u.queries.ConsumeMembershipInvitationIntent(
+	rows, err := u.queries.ConsumeMembershipInvitationIntent(
 		ctx,
 		sqlcgen.ConsumeMembershipInvitationIntentParams{
 			OrganizationID: organizationID,
@@ -264,6 +266,21 @@ func (u *unitOfWork) ConsumeInvitationIntent(
 			},
 		},
 	)
+	if err != nil || rows == 0 {
+		return err
+	}
+	subject := membershipID
+	event, err := organizationaudit.SystemEvent(
+		organizationID,
+		organizationaudit.EventMembershipActivated,
+		&subject,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	return u.insertAuditEvent(ctx, event)
 }
 
 func (u *unitOfWork) DeleteMembershipRemovalIntent(
@@ -271,8 +288,23 @@ func (u *unitOfWork) DeleteMembershipRemovalIntent(
 	organizationID uuid.UUID,
 	membershipID uuid.UUID,
 ) error {
-	return u.queries.DeleteMembershipRemovalIntent(ctx, sqlcgen.DeleteMembershipRemovalIntentParams{
+	rows, err := u.queries.DeleteMembershipRemovalIntent(ctx, sqlcgen.DeleteMembershipRemovalIntentParams{
 		OrganizationID: organizationID,
 		MembershipID:   membershipID,
 	})
+	if err != nil || rows == 0 {
+		return err
+	}
+	subject := membershipID
+	event, err := organizationaudit.SystemEvent(
+		organizationID,
+		organizationaudit.EventMembershipRemovalCompleted,
+		&subject,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	return u.insertAuditEvent(ctx, event)
 }

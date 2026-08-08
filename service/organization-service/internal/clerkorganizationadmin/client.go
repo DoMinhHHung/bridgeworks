@@ -22,6 +22,8 @@ type Client struct {
 	invitations    *organizationinvitation.Client
 	memberships    *organizationmembership.Client
 	httpClient     *http.Client
+	backendURL     string
+	secretKey      string
 	requestTimeout time.Duration
 }
 
@@ -66,6 +68,8 @@ func New(secretKey, rawURL string, timeout time.Duration) (*Client, error) {
 		invitations:    organizationinvitation.NewClient(config),
 		memberships:    organizationmembership.NewClient(config),
 		httpClient:     httpClient,
+		backendURL:     baseURL,
+		secretKey:      secretKey,
 		requestTimeout: timeout,
 	}, nil
 }

@@ -172,6 +172,20 @@ func TestMembershipAdministrationMigrationPreservesAuthorizationAndAddsPrivateSt
 		t.Fatalf("administration PUBLIC grants = %d, want 0", publicGrantCount)
 	}
 
+	// The assertions above intentionally prove the merged v4 migration in
+	// isolation. Current PR4 behavior writes audit_events atomically, so apply
+	// v5 before exercising the current membership administration service.
+	if _, err := provider.UpTo(ctx, 5); err != nil {
+		t.Fatalf("apply migration v5 before current membership regressions: %v", err)
+	}
+	version, err = provider.GetDBVersion(ctx)
+	if err != nil {
+		t.Fatalf("read current migration version: %v", err)
+	}
+	if version != 5 {
+		t.Fatalf("current migration version = %d, want 5", version)
+	}
+
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("pgxpool.New() concurrency database: %v", err)
@@ -290,6 +304,7 @@ func seedConcurrencyOrganization(
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		_, _ = pool.Exec(cleanupCtx, "delete from organization.audit_events where organization_id = $1", organizationID)
 		_, _ = pool.Exec(cleanupCtx, "delete from organization.membership_removal_intents where organization_id = $1", organizationID)
 		_, _ = pool.Exec(cleanupCtx, "delete from organization.membership_invitation_intents where organization_id = $1", organizationID)
 		_, _ = pool.Exec(cleanupCtx, "delete from organization.memberships where organization_id = $1", organizationID)

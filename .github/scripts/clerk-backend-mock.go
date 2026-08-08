@@ -57,6 +57,8 @@ func handler(secret string) http.Handler {
 		switch {
 		case r.Method == http.MethodPost && len(parts) == 4 && parts[3] == "invitations":
 			handleInvitation(w, r, parts[2])
+		case r.Method == http.MethodGet && len(parts) == 4 && parts[3] == "memberships":
+			handleListMemberships(w, r, parts[2])
 		case r.Method == http.MethodDelete && len(parts) == 5 && parts[3] == "memberships" && strings.TrimSpace(parts[4]) != "":
 			handleDeleteMembership(w, parts[2], parts[4])
 		default:
@@ -91,13 +93,38 @@ func handleInvitation(w http.ResponseWriter, r *http.Request, organizationID str
 	})
 }
 
-func handleDeleteMembership(w http.ResponseWriter, organizationID, userID string) {
+func handleListMemberships(w http.ResponseWriter, r *http.Request, organizationID string) {
+	userIDs := r.URL.Query()["user_id"]
+	if len(userIDs) != 1 || strings.TrimSpace(userIDs[0]) == "" {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	userID := userIDs[0]
+	if strings.Contains(userID, "outage") {
+		writeError(w, http.StatusServiceUnavailable)
+		return
+	}
+	memberships := []map[string]any{}
+	if !strings.Contains(userID, "absent") {
+		memberships = append(memberships, membershipPayload(organizationID, userID))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id": "mem_mock", "object": "organization_membership",
-		"organization": map[string]any{"id": organizationID},
-		"public_user_data": map[string]any{"user_id": userID},
-		"role": "org:member", "created_at": 1, "updated_at": 1,
+		"object": "list", "data": memberships, "total_count": len(memberships),
 	})
+}
+
+func handleDeleteMembership(w http.ResponseWriter, organizationID, userID string) {
+	writeJSON(w, http.StatusOK, membershipPayload(organizationID, userID))
+}
+
+func membershipPayload(organizationID, userID string) map[string]any {
+	return map[string]any{
+		"id": "mem_mock", "object": "organization_membership",
+		"organization": map[string]any{"id": organizationID, "name": "mock", "slug": "mock", "max_allowed_memberships": 10},
+		"public_user_data": map[string]any{"user_id": userID, "identifier": nil, "first_name": nil, "last_name": nil, "image_url": "", "has_image": false},
+		"role": "org:member", "permissions": []string{}, "public_metadata": map[string]any{}, "private_metadata": map[string]any{},
+		"created_at": 1, "updated_at": 1,
+	}
 }
 
 func writeError(w http.ResponseWriter, status int) {

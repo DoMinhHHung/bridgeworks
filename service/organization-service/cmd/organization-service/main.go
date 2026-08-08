@@ -21,10 +21,13 @@ import (
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/identityclient"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/membershipadmin"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/observability"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationaudit"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationid"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationonboarding"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/organizationsync"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platform"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platformauthorization"
+	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/platformreview"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/postgres"
 	"github.com/DoMinhHHung/bridgeworks/service/organization-service/internal/store"
 )
@@ -147,6 +150,9 @@ func run() error {
 		return err
 	}
 	membershipAdministrationService := membershipadmin.New(repository, membershipProvider, idGenerator)
+	platformAuthorizationService := platformauthorization.New(identity)
+	platformReviewService := platformreview.New(identity, platformAuthorizationService, repository, repository)
+	organizationAuditService := organizationaudit.New(repository)
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		ServiceName: cfg.ServiceName, Logger: logger, Metrics: metrics,
 		Readiness: database, ReadinessTimeout: cfg.DatabaseReadinessTimeout,
@@ -155,6 +161,8 @@ func run() error {
 		Authenticate: authenticate, CurrentResolver: currentService, Onboarding: onboardingService,
 		BusinessEmailVerification: businessVerificationService,
 		MembershipAdministration:  membershipAdministrationService,
+		PlatformReview:            platformReviewService,
+		OrganizationAudit:         organizationAuditService,
 	})
 	server := &http.Server{
 		Addr: cfg.HTTPAddr, Handler: router,

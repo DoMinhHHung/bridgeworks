@@ -1,43 +1,44 @@
 # organization-service
 
-Organization Service owns the BridgeWorks-local organization profile, local
-organization lifecycle, tenant authorization, business-email proof, membership
-administration intents, and webhook projections. Clerk remains provider authority
-for organization identity/session context, provider memberships, and invitations.
+Organization Service owns BridgeWorks organization product state and tenant authorization. Clerk remains provider authority for authentication/session, provider organizations, provider memberships, provider invitations, and active Clerk organization context. Identity Service remains authority for local BridgeWorks user lifecycle, verified primary-email projection, and global BridgeWorks platform access.
 
-## Authority boundary
+PR4 completes the Organization MVP source boundary for manual company verification, immutable product/security audit, invitation-intent retention, and stuck removal reconciliation. It does **not** deploy production or create production credentials.
 
-Clerk is authoritative for:
+## Authority model
 
-- `clerk_organization_id`;
-- provider organization membership identity and lifecycle;
-- provider organization invitation lifecycle;
-- active Clerk organization context on authenticated sessions.
+Clerk owns:
 
-Organization Service is authoritative for:
+- authentication and session validity;
+- provider organization identity/lifecycle;
+- provider membership identity/lifecycle;
+- provider invitations;
+- active Clerk organization context.
 
-- BridgeWorks-local Organization UUIDs;
-- organization product profile fields;
-- local organization lifecycle/status;
-- tenant `application_role` and permission policy;
-- owner invariants and ownership transfer;
+Identity Service owns:
+
+- local BridgeWorks Identity UUID and user lifecycle (`active|disabled|deleted`);
+- verified primary-email projection;
+- global `platform_admin` assignment;
+- global permission `organization.verification.review`;
+- private `/internal/v1/platform-access/me` contract.
+
+Organization Service owns:
+
+- local public Organization UUID;
+- product profile (`legal_name`, `website`, `country`, `company_type`);
+- local organization lifecycle projection;
+- `verification_status` and `trust_status`;
 - point-in-time business-email proof;
-- local invitation role intent and removal intent;
-- local authorization decisions.
+- local membership `application_role` and tenant permissions;
+- owner invariants and ownership transfer;
+- invitation/removal intents;
+- Organization-owned append-only audit history.
 
-Identity Service is authoritative for:
-
-- active local BridgeWorks user state;
-- minimal verified primary-email projection used for explicit business-email
-  verification;
-- GLOBAL BridgeWorks platform access such as `platform_admin`.
-
-No Organization code reads Identity PostgreSQL. Cross-service Identity data is
-consumed through authenticated private HTTP contracts.
+Organization never reads Identity PostgreSQL and never copies Identity platform-access rows locally. Cross-service Identity data is consumed only through private HTTP contracts.
 
 ## Tenant roles are not platform roles
 
-Tenant-local roles remain exactly:
+Tenant roles are exactly:
 
 ```text
 owner
@@ -47,59 +48,216 @@ delivery_manager
 viewer
 ```
 
-These roles are scoped to one Organization and are not a source of BridgeWorks
-global authority. A tenant `owner` or `admin` is **not** a `platform_admin`, and
-Clerk `org:admin` is also not a BridgeWorks platform admin.
+They are scoped to one Organization. `owner`, `admin`, Clerk `org:admin`, Clerk permissions, email/domain, JWT custom claims, metadata, frontend state, and headers such as `X-Platform-Admin` never imply `platform_admin` or `organization.verification.review`.
 
-PR3.5 prepares a separate Organization-side platform authorization resolver that
-consumes Identity Service's private current-user platform-access contract:
+## Private Organization -> Identity transport
 
-```text
-Clerk authenticated user
-        ↓
-Identity local active user
-        ↓
-Identity local platform access
-        ↓
-organization.verification.review
-```
-
-The platform resolver does not require active Clerk organization context,
-Organization membership, tenant owner/admin role, or current-organization
-resolution. That separation is required because a future BridgeWorks platform
-admin must review organizations across tenants.
-
-For Organization → private Identity calls the existing trusted transport remains
-unchanged:
+Organization reuses the existing private Identity dependency:
 
 ```text
 Authorization: Bearer <same Clerk session JWT>
-X-Serverless-Authorization: Bearer <Google platform identity token>  # Cloud Run
-X-Request-Id: <preserved request id>
+X-Serverless-Authorization: Bearer <Google Cloud Run service identity token>
+X-Request-Id: <propagated request ID>
 ```
 
-Local Docker/CI may use the configured private transport without Google platform
-token; Cloud Run keeps the existing Google service-to-service identity boundary.
-Organization never queries Identity PostgreSQL and does not duplicate the
-platform-access table.
+Local Docker/CI can use private network transport without Google identity. Cloud Run production must preserve service-to-service authentication and private Identity ingress.
 
-Identity platform-access responses are validated strictly. Unknown role,
-unknown permission, malformed response, timeout, 5xx, or platform-token failure
-all fail closed as platform authorization unavailable. They never fall back to
-tenant `owner`, tenant `admin`, Clerk organization role, a forged header, JWT
-custom metadata, email, or email domain.
+Identity/platform-access timeout, 5xx, malformed response, invalid local user state, unknown role/permission, or platform-token failure fails closed. No tenant-role fallback exists.
 
-PR4 may later use the exact global permission:
+## Manual company verification
+
+Customer request route:
+
+```http
+POST /api/v1/organizations/current/verification
+```
+
+Customer-side lifecycle remains:
 
 ```text
-organization.verification.review
+unverified -> pending
+rejected   -> pending
+pending    -> pending   # idempotent
+verified   -> terminal for MVP
 ```
 
-PR3.5 does **not** add a company approve/reject endpoint or trust mutation.
+The local tenant permission remains `organization.verify.request`.
 
-## Webhook projection
+Platform review routes:
 
-Public Clerk webhook endpoint:
+```http
+GET  /api/v1/platform/organizations/verification-queue
+POST /api/v1/platform/organizations/{organizationID}/verification-decisions
+```
+
+Platform authorization is resolved before target Organization lookup:
+
+```text
+verify Clerk session JWT
+-> resolve active Identity user through /api/v1/me
+-> resolve private Identity platform access
+-> require organization.verification.review
+-> only then load/lock the target Organization
+```
+
+An active Clerk Organization context is **not** required for platform review. A platform reviewer may have no tenant membership at all.
+
+Authorization behavior:
+
+```text
+unauthenticated                       -> 401
+authenticated without platform grant -> 403
+Identity/platform-access unavailable -> 503
+authorized + unknown organization    -> 404
+```
+
+### Review queue
+
+`GET /api/v1/platform/organizations/verification-queue` returns only reviewable `verification_status=pending` organizations whose local lifecycle is active. It uses deterministic oldest-request-first ordering and bounded keyset pagination (`limit`, opaque `cursor`).
+
+The response may include local Organization ID, name, legal name, website, country, company type, verification status, point-in-time business-email domain/timestamp, request timestamp, and update timestamp. It never exposes Clerk organization/membership/user IDs, platform-access rows, reviewer Identity UUIDs, tokens, or provider payloads.
+
+### Review decision
+
+Request body is intentionally narrow and rejects unknown fields:
+
+```json
+{"decision":"verified"}
+```
+
+or:
+
+```json
+{"decision":"rejected"}
+```
+
+The Organization ID is path authority; it is not accepted from the body.
+
+Decision semantics are deterministic:
+
+```text
+pending  + verified -> verified + one review audit
+pending  + rejected -> rejected + one review audit
+verified + verified -> idempotent success, no new audit
+rejected + rejected -> idempotent success, no new audit
+verified + rejected -> 409 verification_decision_conflict
+rejected + verified -> 409 until customer resubmits to pending
+unverified + either -> 409 verification_not_pending
+non-active org      -> 409 organization_not_reviewable
+```
+
+The transaction locks the target Organization row, evaluates fresh lifecycle/verification state, updates `verification_status`, appends `organization.verification.reviewed`, and commits. Identity/Clerk network calls happen before the local transaction and never while the row lock is held.
+
+Concurrent opposite decisions serialize on the Organization row: one terminal transition wins and one review event is committed. Concurrent identical terminal decisions can both return success, but only the transition winner inserts the review event.
+
+`verified` remains terminal for the MVP. Manual verification does not mutate `trust_status`.
+
+## Reviewer attribution
+
+Manual review audit stores the authenticated local BridgeWorks Identity UUID as an external UUID reference only. There is no cross-service FK.
+
+Organization audit never stores reviewer email, Clerk user/session ID, JWT, provider metadata, or platform-access rows. Tenant audit responses expose only `actor_kind=platform_admin`; the reviewer Identity UUID is intentionally omitted.
+
+## Business-email proof remains separate
+
+Authenticated route:
+
+```http
+POST /api/v1/organizations/current/business-email-verification
+```
+
+An active local owner/admin may record that their **current verified Identity primary email** belongs to a configured non-personal domain at the explicit verification time.
+
+This means only:
+
+```text
+an authorized active tenant owner/admin
+had a verified Identity primary email
+on the recorded normalized domain
+at business_email_verified_at
+```
+
+It does not prove legal organization ownership or legal domain ownership and is not a hard precondition for manual company verification. Identity email changes do not silently rewrite historical proof; explicit re-verification replaces it.
+
+## Product/security audit
+
+Migration `000005_add_organization_audit.sql` adds `organization.audit_events` and tenant permission `organization.audit.read`.
+
+The append-only audit row contains the minimum bounded state needed for product/security history:
+
+- UUIDv7 audit `id`;
+- local `organization_id` FK;
+- bounded `event_type`;
+- bounded `actor_kind` (`tenant_user|platform_admin|system`);
+- optional external `actor_identity_user_id` UUID with no Identity FK;
+- optional historical actor/subject local membership UUIDs without destructive membership FKs;
+- optional bounded `from_value` / `to_value`;
+- `occurred_at`.
+
+It does **not** store raw email, Clerk user/organization/membership/invitation IDs, JWTs, Authorization headers, Svix signatures, secrets, database URLs, request bodies, provider responses, or arbitrary metadata blobs. Profile update events do not duplicate the profile body.
+
+Recognized audit events are:
+
+```text
+organization.profile.updated
+organization.verification.requested
+organization.business_email.verified
+membership.invitation.requested
+membership.role.changed
+membership.removal.requested
+membership.leave.requested
+organization.ownership.transferred
+organization.verification.reviewed
+membership.activated
+membership.removal.completed
+```
+
+Application runtime has no update/delete path for audit events.
+
+### Audit atomicity
+
+For local transactional commands, product mutation and audit insert share the same PostgreSQL transaction:
+
+- profile update;
+- customer verification request;
+- business-email proof;
+- invitation intent creation;
+- membership role mutation;
+- removal reservation;
+- leave reservation;
+- ownership transfer;
+- platform verification decision;
+- maintenance removal finalization.
+
+If audit insertion fails, the corresponding local mutation rolls back. Provider network I/O remains outside local database transactions.
+
+Provider reconciliation emits system completion events only when local authorization state actually changes; duplicate/stale reconciliation does not duplicate completion audit.
+
+## Tenant audit API
+
+Authenticated route:
+
+```http
+GET /api/v1/organizations/current/audit-events
+```
+
+Permission:
+
+```text
+owner            -> organization.audit.read
+admin            -> organization.audit.read
+viewer           -> denied
+recruiter        -> denied
+delivery_manager -> denied
+```
+
+The route is current-Organization scoped and uses bounded keyset pagination. Tenant response fields are limited to safe local audit data such as event ID, event type, actor kind, safe subject membership UUID, bounded from/to values, and occurrence time.
+
+Platform reviewer Identity UUID, provider IDs, emails, and internal dependency data are never returned.
+
+## Provider webhook projection
+
+Public signed endpoint:
 
 ```http
 POST /api/v1/organizations/webhooks/clerk
@@ -114,180 +272,36 @@ Supported provider events:
 - `organizationMembership.updated`
 - `organizationMembership.deleted`
 
-Webhook signature verification uses the configured Organization-specific Svix
-secret on the raw request body. Payload is bounded, verified before decode,
-processed through a transactional inbox, and never logged.
+Signature verification uses the Organization-specific Svix secret against the raw bounded body before decoding. Provider lifecycle events mutate only provider-owned projection fields. They do not overwrite `verification_status`, `trust_status`, product profile, business-email proof, or local `application_role`.
 
-Provider lifecycle events update only provider-owned projection fields. They do
-not overwrite BridgeWorks-owned product fields such as `legal_name`, `website`,
-`country`, `company_type`, `verification_status`, `trust_status`,
-`business_email_domain`, or local `application_role`.
+A later signed `organization.updated` may update provider name/slug while a prior manual `verification_status=verified`, business-email proof, and review audit remain unchanged.
 
-## Current organization
-
-Authenticated tenant route:
-
-```http
-GET /api/v1/organizations/current
-```
-
-Authorization chain remains tenant-specific:
-
-```text
-Clerk session JWT
-→ Identity /api/v1/me active-account check
-→ Clerk active organization context
-→ Organization local membership lookup
-→ local application_role / permissions
-```
-
-This chain is intentionally distinct from the global platform authorization
-resolver described above.
-
-Public response uses BridgeWorks-local identifiers. Provider IDs are not public
-API authority. Current response includes the local business-email proof domain
-and timestamp when present, but does not expose the external Identity UUID that
-performed the proof.
-
-## Product profile
-
-Authenticated product-profile mutation remains:
-
-```http
-PATCH /api/v1/organizations/current
-```
-
-Only tenant-local authorization governs this route. PR3.5 does not change its
-semantics or privilege matrix.
-
-## Verification request
-
-Existing tenant verification-request route remains:
-
-```http
-POST /api/v1/organizations/current/verification
-```
-
-This request does not perform manual company approval/rejection. PR3.5 leaves
-its current tenant authorization and status semantics unchanged.
-
-## Business-email proof
+## Invitations and intent retention
 
 Authenticated route:
-
-```http
-POST /api/v1/organizations/current/business-email-verification
-```
-
-An active local `owner` or `admin` may explicitly prove that, at that request
-time, their Identity projection had a verified primary email on a configured
-non-personal domain.
-
-The proof means only:
-
-```text
-an authorized active local owner/admin
-had a verified Identity primary email
-on the stored normalized business domain
-at business_email_verified_at
-```
-
-It does not prove legal ownership of the organization or domain and does not set
-`verification_status=verified`.
-
-Organization stores only:
-
-- normalized domain;
-- verification timestamp;
-- external Identity local UUID that performed verification.
-
-It does not store raw email and there is no cross-service FK.
-
-Identity email updates never silently rewrite historical Organization proof.
-Explicit re-verification replaces the stored point-in-time proof with the
-current verified business domain. If the current Identity primary email becomes
-unverified or absent, a new verification request fails safely and the previous
-historical proof is retained.
-
-## Invitation authority
-
-Authenticated invitation endpoint:
 
 ```http
 POST /api/v1/organizations/current/invitations
 ```
 
-BridgeWorks does not trust Clerk metadata as application-role authority. The
-flow is:
+Flow:
 
-1. create local UUIDv7 `membership_invitation_intents` row containing the
-   requested local `application_role`;
-2. call Clerk OrganizationInvitation with provider role always `org:member`;
-3. send only opaque public metadata:
-   `bridgeworks_invitation_id=<local intent UUIDv7>`;
-4. wait for a verified signed Clerk membership webhook;
-5. resolve the pending intent scoped to the same local organization;
-6. project the membership and consume the intent only after successful local
-   role reconciliation.
+1. transactionally create a local UUIDv7 invitation intent with requested local role and audit `membership.invitation.requested`;
+2. commit;
+3. call Clerk invitation API with provider role fixed to `org:member`;
+4. send only opaque `bridgeworks_invitation_id` public metadata;
+5. signed Clerk membership webhook resolves the pending same-Organization UUIDv7 intent, applies local role, consumes it, and may record `membership.activated`.
 
-Missing, malformed, non-UUIDv7, unknown, already-consumed, or cross-organization
-markers cannot grant the intended privileged local role. Those cases use the
-safe compatibility projection path instead.
+Missing, malformed, non-UUIDv7, unknown, consumed, or cross-Organization markers cannot grant the intended privileged role.
 
-The local intended role itself is never stored in or trusted from Clerk
-metadata.
+Retention policy:
 
-## Membership role administration
+- consumed/terminal invitation intents may be pruned only after configured retention;
+- pending intents are not deleted merely because they are old;
+- ambiguous provider-timeout intents remain reconcilable;
+- intent UUIDs are never recycled.
 
-Authenticated role mutation:
-
-```http
-PATCH /api/v1/organizations/current/members/{membershipID}/role
-```
-
-Targets are local BridgeWorks membership UUIDs. Client/provider organization IDs
-are never accepted as authorization authority.
-
-Role rules:
-
-- `owner` may assign/revoke owner subject to last-owner invariant;
-- `admin` may manage non-owner roles only;
-- `admin` cannot promote itself/others to owner;
-- `admin` cannot mutate an owner;
-- recruiter, delivery manager, and viewer cannot administer roles;
-- cross-tenant target IDs use the same not-found path and do not create an
-  existence oracle.
-
-## Owner invariant and transfer
-
-Multiple owners are allowed. Effective owner means:
-
-```text
-status = active
-AND application_role = owner
-AND no pending membership removal intent
-```
-
-Organization-scoped PostgreSQL advisory locking serializes owner counting,
-owner role mutation, removal reservation, and ownership transfer.
-
-Last effective owner cannot:
-
-- leave;
-- be removed;
-- demote itself;
-- be demoted by another actor.
-
-Ownership transfer endpoint:
-
-```http
-POST /api/v1/organizations/current/ownership-transfer
-```
-
-Transfer is a single local PostgreSQL transaction: target becomes owner and
-actor becomes admin without a zero-owner intermediate state.
-
-## Removal and leave
+## Removal/leave and reconciliation
 
 Authenticated routes:
 
@@ -296,123 +310,113 @@ DELETE /api/v1/organizations/current/members/{membershipID}
 DELETE /api/v1/organizations/current/membership
 ```
 
-Removal is deliberately two-phase:
-
-1. inside a local transaction, acquire organization advisory lock and create a
-   removal reservation;
-2. the reserved membership is immediately excluded from current-membership
-   authorization and effective-owner counting;
-3. commit;
-4. call Clerk membership deletion outside PostgreSQL transaction;
-5. verified Clerk `organizationMembership.deleted` webhook finalizes the local
-   deleted projection and removes the reservation.
-
-A removal-pending actor cannot continue to use business verification,
-invitations, role mutation, ownership transfer, or membership removal routes.
-
-Provider timeout, 429, 5xx, or ambiguous network failure is returned as a
-sanitized retryable service failure. The reservation remains because provider
-side effects may already have occurred. Provider 404 is treated as already
-absent/pending webhook reconciliation. Deterministic provider conflict/rejection
-cleans the local reservation.
-
-## Creator owner-bootstrap fence
-
-Initial creator owner bootstrap remains a one-time local projection behavior.
-Once `owner_bootstrap_eligible=false`, BridgeWorks never restores it and does not
-reset `owner_bootstrapped`.
-
-Supported BridgeWorks remove/invite/rejoin flow therefore cannot let a historical
-creator regain automatic owner merely because a fresh Clerk membership appears.
-A BridgeWorks invitation for that creator is reconciled using the local
-invitation role intent instead.
-
-## Provider administration boundary
-
-Organization membership administration uses a narrow Clerk Backend API adapter
-with bounded timeout. Provider calls happen only after local PostgreSQL
-transactions commit; no network I/O is held inside a transaction.
-
-`CLERK_BACKEND_API_URL` is an origin-only config value. Production default is:
+Removal remains fail closed:
 
 ```text
-https://api.clerk.com
+local removal reservation transaction + audit
+-> membership immediately loses local authorization/effective-owner status
+-> commit
+-> provider delete outside transaction
+-> signed provider webhook normally finalizes local deleted projection
 ```
 
-The client appends `/v1`. Config rejects path, query, fragment, userinfo, or
-cleartext HTTP outside trusted local/private destinations.
+Provider timeout/429/5xx/ambiguous result never restores authorization and never implies absence.
 
-Invitation creation is not blindly retried after timeout/429/ambiguous failure,
-because Clerk may have accepted the original request. Local pending invitation
-intent is retained for later operational reconciliation.
+Maintenance reconciliation handles old stuck removal intents conservatively:
 
-## Configuration
+1. query authoritative Clerk membership presence outside the DB transaction;
+2. provider reports membership present -> leave removal pending;
+3. provider timeout/429/5xx -> leave state unchanged and fail safely;
+4. authoritative provider absence -> open local transaction, acquire Organization lock, lock intent + membership, re-check local state, then finalize deletion, clear intent, append one `membership.removal.completed` system audit, commit;
+5. if the intent disappeared or membership was already locally finalized before the transaction acquired locks, do not fabricate a second deletion/audit event.
 
-Important Organization variables:
+A removal-pending membership stays unauthorized throughout reconciliation.
+
+## Maintenance CLI
+
+Operator-only binary:
+
+```text
+/usr/local/bin/organization-maintenance
+```
+
+Commands:
+
+```text
+prune-consumed-invitations
+reconcile-removals
+status
+```
+
+There is no maintenance HTTP listener and no APISIX maintenance route.
+
+Maintenance configuration:
 
 ```dotenv
-IDENTITY_SERVICE_URL=http://identity-service:8080
-IDENTITY_SERVICE_AUTH_MODE=none
-IDENTITY_SERVICE_AUDIENCE=
-IDENTITY_SERVICE_REQUEST_TIMEOUT=2s
-CLERK_SECRET_KEY=<secret-managed Clerk Backend API key>
-CLERK_BACKEND_API_URL=https://api.clerk.com
-CLERK_BACKEND_API_TIMEOUT=3s
+ORGANIZATION_MAINTENANCE_DATABASE_URL=<operator-only DB credential>
+ORGANIZATION_MAINTENANCE_DATABASE_CONNECT_TIMEOUT=5s
+ORGANIZATION_MAINTENANCE_COMMAND_TIMEOUT=30s
+ORGANIZATION_INVITATION_INTENT_RETENTION=720h
+ORGANIZATION_REMOVAL_RECONCILE_AFTER=15m
+ORGANIZATION_MAINTENANCE_BATCH_SIZE=100
 ```
 
-`IDENTITY_SERVICE_AUTH_MODE=google_id_token` in Cloud Run uses Google platform
-identity for the private Identity service. The same user Clerk bearer token is
-preserved on the downstream request. PR3.5 reuses this exact transport for
-private `/internal/v1/platform-access/me` lookups; it does not create a parallel
-trust channel.
+Removal reconciliation additionally requires the existing Clerk Backend API configuration.
 
-Production secret values are not committed. `CLERK_SECRET_KEY` and future
-operator credentials belong in managed secret infrastructure.
+The normal `organization-service` runtime container must **not** receive `ORGANIZATION_MAINTENANCE_DATABASE_URL`.
 
-## Public HTTP contracts
+## Database credential boundaries
 
-PR3 tenant API remains:
+Production must provision distinct authority classes; PR4 only documents the contract and does not create credentials.
+
+Identity:
 
 ```text
+DATABASE_URL                   normal Identity runtime
+PLATFORM_ACCESS_DATABASE_URL   platform-access operator only
+MIGRATION_DATABASE_URL         migration/DDL
+```
+
+Organization:
+
+```text
+DATABASE_URL                            normal Organization runtime
+MIGRATION_DATABASE_URL                  migration/DDL
+ORGANIZATION_MAINTENANCE_DATABASE_URL  maintenance operator only
+```
+
+Normal runtime containers must not receive operator-only DB credentials. No production credential values or service-account JSON keys belong in the repository.
+
+## Public API surface
+
+Public Organization routes through APISIX are:
+
+```text
+GET    /api/v1/organizations/health/live
+GET    /api/v1/organizations/health/ready
+POST   /api/v1/organizations/webhooks/clerk
 GET    /api/v1/organizations/current
 PATCH  /api/v1/organizations/current
 POST   /api/v1/organizations/current/verification
 POST   /api/v1/organizations/current/business-email-verification
+GET    /api/v1/organizations/current/audit-events
 POST   /api/v1/organizations/current/invitations
+GET    /api/v1/organizations/current/membership
+DELETE /api/v1/organizations/current/membership
 PATCH  /api/v1/organizations/current/members/{membershipID}/role
 DELETE /api/v1/organizations/current/members/{membershipID}
-DELETE /api/v1/organizations/current/membership
 POST   /api/v1/organizations/current/ownership-transfer
-POST   /api/v1/organizations/webhooks/clerk
-GET    /api/v1/organizations/health/live
-GET    /api/v1/organizations/health/ready
+GET    /api/v1/platform/organizations/verification-queue
+POST   /api/v1/platform/organizations/{organizationID}/verification-decisions
 ```
 
-PR3.5 adds **no** public Organization platform-admin or manual-verification
-route. Identity `/internal/v1/platform-access/me` is private and is not routed by
-APISIX.
+Identity `/internal/v1/platform-access/me` remains private and is intentionally absent from APISIX/public Organization OpenAPI.
 
-## Manual company verification blocker
+Authenticated responses use `Cache-Control: no-store`, `Vary: Authorization`, and propagated `X-Request-Id`; browser preflight uses the configured authorized frontend origins and never wildcard credentialed CORS.
 
-Manual company verification mutation is still outside this PR:
+## Verification and CI
 
-```text
-manual_company_verification_blocked=true
-```
-
-PR3.5 establishes the secure platform authority foundation only. While this PR
-is unmerged, the prerequisite is still pending. Once PR3.5 is merged and its
-production credential/transport prerequisites are satisfied, the specific
-platform-admin authority prerequisite can be considered provided for a later
-PR4. PR4 itself is not part of this change.
-
-No email allowlist, hidden header, hardcoded user, Clerk org-role shortcut,
-static operator bearer token, or tenant-owner/admin fallback is introduced.
-
-## Verification
-
-Repository validation keeps the exact current Go toolchain and clean generated
-SQL:
+Authoritative module validation:
 
 ```bash
 make repo-check
@@ -429,46 +433,18 @@ golangci-lint run ./...
 go tool cover -func=coverage.out
 ```
 
-PR3.5 security regressions cover:
+Organization CI additionally verifies real PostgreSQL v1->v5 migration, preserved PR1-PR3.5 invariants, owner concurrency, manual platform review E2E, same-session platform grant revocation, Identity outage fail-closed behavior, real concurrent review decisions, audit authorization/atomicity, invitation retention, removal reconciliation, signed Clerk projection ownership, sensitive-log leakage, APISIX private-route policy, and private-port isolation.
 
-- ordinary user without local platform assignment has no review permission;
-- tenant owner/admin and Clerk `org:admin` do not imply platform access;
-- forged platform header and role-like JWT claims do not grant authority;
-- explicit local `platform_admin` maps only to
-  `organization.verification.review`;
-- disabled/deleted Identity account is denied even with an assignment;
-- Identity timeout/5xx/malformed/unknown role or permission fails closed;
-- platform authorization does not require Organization context;
-- Organization→Identity request preserves Clerk bearer token, request ID, and
-  existing Google serverless auth when configured;
-- APISIX does not expose the private Identity platform-access path;
-- existing Organization PR3 migration, onboarding, business-email, invitation,
-  owner concurrency, projection, unique-violation, sensitive-log, and private
-  port regressions remain authoritative.
+## Production prerequisites
 
-## Private metrics and access logs
+PR4 is source-level completion only. Production still requires deployment work outside this PR, including:
 
-Organization Service starts a second operational HTTP listener configured by:
+- provisioned least-privilege runtime/migration/operator DB roles;
+- Secret Manager wiring for DB URLs, Clerk secrets, and service identity configuration;
+- Cloud Run service-to-service Identity authentication and private ingress verification;
+- production migration execution/rollback procedure;
+- operator scheduling/runbook for maintenance CLI (for example a separately authorized Cloud Run Job);
+- production observability/alert thresholds and operational ownership;
+- deployment/cutover validation.
 
-```dotenv
-ORGANIZATION_METRICS_ADDR=:9090
-```
-
-The metrics listener is private to the Docker/Cloud Run service network and is
-not routed through APISIX. It exposes bounded service-owned Prometheus metrics
-and does not affect application readiness.
-
-Access logs exclude Authorization, Cookie, JWTs, webhook bodies, Svix headers,
-email addresses, Clerk user IDs, local UUIDs, database URLs, request/response
-bodies, platform-access payloads, and raw dependency errors.
-
-## Production operations
-
-Production Organization→Identity calls must retain private Identity ingress and
-Google service identity token enforcement. PR3.5 does not weaken or replace that
-platform-auth boundary. Identity runtime and future platform-access operator
-credentials must remain separately managed; Organization receives neither.
-
-Cross-service capacity, observability, retention, and deployment work remains in
-the repository production-readiness roadmap. No production deployment is part
-of PR3.5.
+No production migration, Cloud Run deployment, Vercel deployment, Secret Manager mutation, database-role creation, or CI/CD cutover is performed by PR4.

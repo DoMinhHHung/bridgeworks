@@ -23,7 +23,7 @@ func (q *Queries) AcquireOrganizationAdvisoryLockByID(ctx context.Context, id uu
 	return err
 }
 
-const consumeMembershipInvitationIntent = `-- name: ConsumeMembershipInvitationIntent :exec
+const consumeMembershipInvitationIntent = `-- name: ConsumeMembershipInvitationIntent :execrows
 UPDATE organization.membership_invitation_intents
 SET consumed_membership_id = $3,
     consumed_at = now()
@@ -38,9 +38,12 @@ type ConsumeMembershipInvitationIntentParams struct {
 	ConsumedMembershipID pgtype.UUID
 }
 
-func (q *Queries) ConsumeMembershipInvitationIntent(ctx context.Context, arg ConsumeMembershipInvitationIntentParams) error {
-	_, err := q.db.Exec(ctx, consumeMembershipInvitationIntent, arg.OrganizationID, arg.ID, arg.ConsumedMembershipID)
-	return err
+func (q *Queries) ConsumeMembershipInvitationIntent(ctx context.Context, arg ConsumeMembershipInvitationIntentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, consumeMembershipInvitationIntent, arg.OrganizationID, arg.ID, arg.ConsumedMembershipID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const countEffectiveOwners = `-- name: CountEffectiveOwners :one
@@ -80,7 +83,7 @@ func (q *Queries) DeleteMembershipInvitationIntent(ctx context.Context, arg Dele
 	return err
 }
 
-const deleteMembershipRemovalIntent = `-- name: DeleteMembershipRemovalIntent :exec
+const deleteMembershipRemovalIntent = `-- name: DeleteMembershipRemovalIntent :execrows
 DELETE FROM organization.membership_removal_intents
 WHERE organization_id = $1
   AND membership_id = $2
@@ -91,9 +94,12 @@ type DeleteMembershipRemovalIntentParams struct {
 	MembershipID   uuid.UUID
 }
 
-func (q *Queries) DeleteMembershipRemovalIntent(ctx context.Context, arg DeleteMembershipRemovalIntentParams) error {
-	_, err := q.db.Exec(ctx, deleteMembershipRemovalIntent, arg.OrganizationID, arg.MembershipID)
-	return err
+func (q *Queries) DeleteMembershipRemovalIntent(ctx context.Context, arg DeleteMembershipRemovalIntentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMembershipRemovalIntent, arg.OrganizationID, arg.MembershipID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getOrganizationProviderReferenceByID = `-- name: GetOrganizationProviderReferenceByID :one
