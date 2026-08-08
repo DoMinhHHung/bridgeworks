@@ -1,0 +1,190 @@
+name: Artifact Build and Publication
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Artifact source and component detection
+    runs-on: ubuntu-latest
+    outputs:
+      identity: ${{ steps.detect.outputs.identity }}
+      organization: ${{ steps.detect.outputs.organization }}
+      apisix: ${{ steps.detect.outputs.apisix }}
+      any: ${{ steps.detect.outputs.any }}
+      force_all: ${{ steps.detect.outputs.force_all }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate artifact pipeline helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n .github/scripts/ci-base-sha.sh .github/scripts/publish-cicd-artifacts.sh
+          python3 -m py_compile \
+            .github/scripts/cicd-artifacts.py \
+            .github/scripts/test-cicd-artifacts.py
+          python3 .github/scripts/test-cicd-artifacts.py
+          python3 .github/scripts/cicd-artifacts.py policy --root .
+          ! grep -R --line-number --fixed-strings 'origin/main' .github/workflows .github/scripts
+          ! grep -R --line-number --fixed-strings 'git fetch origin main' .github/workflows .github/scripts
+
+      - name: Detect build candidates
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_sha="$(bash .github/scripts/ci-base-sha.sh)"
+          result="$(python3 .github/scripts/cicd-artifacts.py detect --base "${base_sha}" --head HEAD)"
+          printf '%s\n' "${result}" | jq .
+          printf 'identity=%s\n' "$(jq -r '.components.identity' <<< "${result}")" >> "${GITHUB_OUTPUT}"
+          printf 'organization=%s\n' "$(jq -r '.components.organization' <<< "${result}")" >> "${GITHUB_OUTPUT}"
+          printf 'apisix=%s\n' "$(jq -r '.components.apisix' <<< "${result}")" >> "${GITHUB_OUTPUT}"
+          printf 'any=%s\n' "$(jq -r '.any' <<< "${result}")" >> "${GITHUB_OUTPUT}"
+          printf 'force_all=%s\n' "$(jq -r '.force_all' <<< "${result}")" >> "${GITHUB_OUTPUT}"
+
+  pr-build:
+    name: PR image build validation
+    if: github.event_name == 'pull_request'
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build Identity image without push
+        if: needs.detect.outputs.identity == 'true'
+        run: docker build service/identity-service
+
+      - name: Build Organization image without push
+        if: needs.detect.outputs.organization == 'true'
+        run: docker build service/organization-service
+
+      - name: Build APISIX image without push
+        if: needs.detect.outputs.apisix == 'true'
+        run: docker build gateway/apisix
+
+      - name: Confirm no runtime build was required
+        if: needs.detect.outputs.any != 'true'
+        run: echo 'No runtime component source changed; build-only validation is not required.'
+
+  artifact-required:
+    name: Artifact build required
+    if: always() && github.event_name == 'pull_request'
+    needs: [detect, pr-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce artifact validation result
+        shell: bash
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          BUILD_RESULT: ${{ needs.pr-build.result }}
+        run: |
+          set -euo pipefail
+          test "${DETECT_RESULT}" = "success"
+          test "${BUILD_RESULT}" = "success"
+
+  publish:
+    name: Publish immutable dev artifacts
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: bridgeworks-dev-artifact-publication
+      cancel-in-progress: false
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.GCP_ARTIFACT_REGISTRY_REPOSITORY }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_ARTIFACT_WRITER_SERVICE_ACCOUNT: ${{ vars.GCP_ARTIFACT_WRITER_SERVICE_ACCOUNT }}
+      RELEASE_MANIFEST_PATH: ${{ github.workspace }}/release-manifest.json
+    steps:
+      - name: Checkout trusted dev commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate external publication configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            GCP_PROJECT_ID \
+            GCP_REGION \
+            GCP_ARTIFACT_REGISTRY_REPOSITORY \
+            GCP_WORKLOAD_IDENTITY_PROVIDER \
+            GCP_ARTIFACT_WRITER_SERVICE_ACCOUNT; do
+            test -n "${!name:-}" || { echo "Missing required repository variable: ${name}" >&2; exit 1; }
+          done
+
+      - name: Authenticate to Google Cloud with GitHub OIDC
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_ARTIFACT_WRITER_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure Artifact Registry Docker authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Set up Docker Buildx for remote manifest verification
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve, build once, and record all component digests
+        shell: bash
+        run: bash .github/scripts/publish-cicd-artifacts.sh
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: bridgeworks-release-${{ github.sha }}
+          path: ${{ env.RELEASE_MANIFEST_PATH }}
+          if-no-files-found: error
+
+      - name: Write sanitized release summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${RELEASE_MANIFEST_PATH}" >> "${GITHUB_STEP_SUMMARY}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest = json.loads(Path(sys.argv[1]).read_text())
+          print("## BridgeWorks dev artifact release")
+          print()
+          print(f"- source commit: `{manifest['source_commit_sha']}`")
+          print(f"- source tree: `{manifest['source_tree_sha']}`")
+          for name in ("identity", "organization", "apisix"):
+              component = manifest["components"][name]
+              mode = "built" if component["built"] else "reused"
+              print(f"- {name} tree: `{component['component_tree_sha']}`")
+              print(f"  - reference: `{component['reference']}`")
+              print(f"  - result: **{mode}**")
+          PY
