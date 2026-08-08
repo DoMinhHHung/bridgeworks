@@ -49,13 +49,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --exit-code origin/main...HEAD -- \
+          base_sha="$(bash .github/scripts/ci-base-sha.sh)"
+          git diff --exit-code "${base_sha}...HEAD" -- \
             service/identity-service/migrations/000001_create_app_users.sql \
             service/identity-service/migrations/000002_add_platform_access.sql \
             service/organization-service/migrations/000001_create_organization_foundation.sql \
             service/organization-service/migrations/000002_complete_organization_domain.sql \
             service/organization-service/migrations/000003_add_owner_bootstrap_state.sql \
             service/organization-service/migrations/000004_add_membership_administration.sql \
+            service/organization-service/migrations/000005_add_organization_audit.sql \
             gateway/apisix/conf/config.yaml \
             service/identity-service/internal/currentuser/cache.go \
             service/identity-service/internal/rediscache/client.go \
