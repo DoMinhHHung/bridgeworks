@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   detect:
-    name: Detect APISIX Cloud Run validation scope
+    name: Detect APISIX runtime validation scope
     runs-on: ubuntu-latest
     outputs:
       required: ${{ steps.scope.outputs.required }}
@@ -51,7 +51,7 @@ jobs:
           printf 'required=%s\n' "${required}" >> "${GITHUB_OUTPUT}"
 
   validate:
-    name: Build and validate Cloud Run gateway
+    name: Build and validate portable gateway
     if: needs.detect.outputs.required == 'true'
     needs: detect
     runs-on: ubuntu-latest
@@ -71,9 +71,9 @@ jobs:
             gateway/apisix/conf/apisix.yaml \
             gateway/apisix/conf/apisix.cloud-run.yaml
 
-      - name: Validate APISIX Cloud Run image
+      - name: Validate APISIX runtime portability
         shell: bash
-        run: bash gateway/apisix/scripts/validate-cloud-run-image.sh
+        run: bash gateway/apisix/scripts/validate-runtime-image.sh
 
   required:
     name: APISIX Cloud Run required

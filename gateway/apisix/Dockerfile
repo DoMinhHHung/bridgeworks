@@ -5,15 +5,23 @@ FROM ${APISIX_BASE_IMAGE}
 
 USER root
 
-COPY --chown=apisix:0 conf/config.cloud-run.yaml /usr/local/apisix/conf/config.yaml
-COPY --chown=apisix:0 conf/apisix.cloud-run.yaml /usr/local/apisix/conf/apisix.yaml
+COPY --chown=apisix:0 conf/config.cloud-run.yaml /usr/local/apisix/bridgeworks/conf/config.cloud-run.yaml
+COPY --chown=apisix:0 conf/config.render.yaml /usr/local/apisix/bridgeworks/conf/config.render.yaml
+COPY --chown=apisix:0 conf/apisix.cloud-run.yaml /usr/local/apisix/bridgeworks/conf/apisix.cloud-run.yaml
 COPY --chown=apisix:0 custom/ /usr/local/apisix/custom/
-COPY --chown=apisix:0 scripts/cloud-run-entrypoint.sh /usr/local/bin/bridgeworks-apisix-entrypoint
+COPY --chown=apisix:0 scripts/runtime-config.sh /usr/local/bin/bridgeworks-apisix-runtime-config
+COPY --chown=apisix:0 scripts/runtime-entrypoint.sh /usr/local/bin/bridgeworks-apisix-entrypoint
 
-RUN chmod 0555 /usr/local/bin/bridgeworks-apisix-entrypoint \
-    && chmod 0444 /usr/local/apisix/conf/config.yaml /usr/local/apisix/conf/apisix.yaml \
+RUN chmod 0555 \
+      /usr/local/bin/bridgeworks-apisix-runtime-config \
+      /usr/local/bin/bridgeworks-apisix-entrypoint \
+    && chmod 0444 /usr/local/apisix/bridgeworks/conf/*.yaml \
     && find /usr/local/apisix/custom -type d -exec chmod 0555 {} \; \
-    && find /usr/local/apisix/custom -type f -exec chmod 0444 {} \;
+    && find /usr/local/apisix/custom -type f -exec chmod 0444 {} \; \
+    && : > /usr/local/apisix/conf/config.yaml \
+    && : > /usr/local/apisix/conf/apisix.yaml \
+    && chown apisix:0 /usr/local/apisix/conf/config.yaml /usr/local/apisix/conf/apisix.yaml \
+    && chmod 0600 /usr/local/apisix/conf/config.yaml /usr/local/apisix/conf/apisix.yaml
 
 USER apisix
 
