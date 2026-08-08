@@ -142,8 +142,8 @@ insert into organization.organizations (
   id, clerk_organization_id, name, slug, status, verification_status, trust_status,
   clerk_created_by_user_id, owner_bootstrapped, owner_bootstrap_eligible
 ) values
-  ('${org_uuid}','org_pr4_target','PR4 Target','pr4-target','active','unverified','unassessed','user_pr4_owner',true,false),
-  ('${other_org_uuid}','org_pr4_other','PR4 Other','pr4-other','active','unverified','unassessed','user_pr4_admin',true,false)
+  ('${org_uuid}','org_pr4_target','PR4 Target','pr4-target','active','unverified','unassessed','user_pr4_owner',true,true),
+  ('${other_org_uuid}','org_pr4_other','PR4 Other','pr4-other','active','unverified','unassessed','user_pr4_admin',true,true)
 on conflict do nothing;
 insert into organization.memberships (id,clerk_membership_id,organization_id,clerk_user_id,clerk_role,application_role,status) values
   ('${owner_mem}','mem_pr4_owner','${org_uuid}','user_pr4_owner','org:admin','owner','active'),
@@ -338,6 +338,7 @@ phase=maintenance-removals
 present_mem='018f0c76-8f6c-7cc4-8000-000000000441'
 absent_mem='018f0c76-8f6c-7cc4-8000-000000000442'
 outage_mem='018f0c76-8f6c-7cc4-8000-000000000443'
+stale_mem='018f0c76-8f6c-7cc4-8000-000000000444'
 organization_sql "
 insert into organization.memberships (id,clerk_membership_id,organization_id,clerk_user_id,application_role,status) values
 ('${present_mem}','mem_pr4_removal_present','${org_uuid}','user_pr4_removal_present','viewer','active'),
@@ -356,6 +357,19 @@ test "$(organization_sql "select count(*) from organization.membership_removal_i
 test "$(organization_sql "select count(*) from organization.audit_events where organization_id='${org_uuid}' and event_type='membership.removal.completed' and subject_membership_id='${absent_mem}'")" = '1'
 run_maintenance reconcile-removals "${work}/maintenance-reconcile-idempotent.log"
 test "$(organization_sql "select count(*) from organization.audit_events where organization_id='${org_uuid}' and event_type='membership.removal.completed' and subject_membership_id='${absent_mem}'")" = '1'
+
+# A candidate discovered before local finalization must be re-checked under the
+# local transaction lock and must not fabricate a second deletion/audit.
+organization_sql "
+insert into organization.memberships (id,clerk_membership_id,organization_id,clerk_user_id,application_role,status)
+values ('${stale_mem}','mem_pr4_removal_stale','${org_uuid}','user_pr4_removal_absent','viewer','deleted');
+insert into organization.membership_removal_intents (membership_id,organization_id,requested_by_identity_user_id,created_at)
+values ('${stale_mem}','${org_uuid}','${owner_identity_uuid}',now()-interval '90 minutes');" >/dev/null
+run_maintenance reconcile-removals "${work}/maintenance-reconcile-stale.log"
+test "$(organization_sql "select status from organization.memberships where id='${stale_mem}'")" = 'deleted'
+test "$(organization_sql "select count(*) from organization.membership_removal_intents where membership_id='${stale_mem}'")" = '0'
+test "$(organization_sql "select count(*) from organization.audit_events where organization_id='${org_uuid}' and event_type='membership.removal.completed' and subject_membership_id='${stale_mem}'")" = '0'
+
 organization_sql "
 insert into organization.memberships (id,clerk_membership_id,organization_id,clerk_user_id,application_role,status)
 values ('${outage_mem}','mem_pr4_removal_outage','${org_uuid}','user_pr4_removal_outage','viewer','active');
@@ -401,7 +415,7 @@ forbidden=[
     'user_pr4_', 'org_pr4_', 'mem_pr4_', '@company-pr4.example',
 ]
 files=['organization-service.log','identity-service.log','clerk-mock.log','platform-grant.log','platform-revoke.log','platform-regrant.log',
-       'maintenance-prune.log','maintenance-reconcile.log','maintenance-reconcile-idempotent.log','maintenance-reconcile-outage.log']
+       'maintenance-prune.log','maintenance-reconcile.log','maintenance-reconcile-idempotent.log','maintenance-reconcile-stale.log','maintenance-reconcile-outage.log']
 combined='\n'.join((work/name).read_text(encoding='utf-8', errors='replace') for name in files if (work/name).exists())
 for value in forbidden:
     if value:
