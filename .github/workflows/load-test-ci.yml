@@ -96,13 +96,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --exit-code origin/main...HEAD -- \
+          base_sha="$(bash .github/scripts/ci-base-sha.sh)"
+          git diff --exit-code "${base_sha}...HEAD" -- \
             service/identity-service/migrations/000001_create_app_users.sql
-          git diff --exit-code origin/main...HEAD -- \
+          git diff --exit-code "${base_sha}...HEAD" -- \
             service/organization-service/migrations/000001_create_organization_foundation.sql
-          git diff --exit-code origin/main...HEAD -- \
+          git diff --exit-code "${base_sha}...HEAD" -- \
             service/organization-service/migrations/000002_complete_organization_domain.sql
-          git diff --exit-code origin/main...HEAD -- \
+          git diff --exit-code "${base_sha}...HEAD" -- \
             gateway/apisix/conf/config.yaml
           grep --quiet --fixed-strings 'methods: [GET, PATCH, OPTIONS]' gateway/apisix/conf/apisix.yaml
           grep --quiet --fixed-strings 'uri: /api/v1/organizations/current/verification' gateway/apisix/conf/apisix.yaml
