@@ -75,15 +75,18 @@ func (u *maintenanceUnitOfWork) LockRemovalIntent(
 	ctx context.Context,
 	organizationID uuid.UUID,
 	membershipID uuid.UUID,
-) (bool, error) {
-	_, err := u.queries.LockRemovalIntentForMaintenance(ctx, sqlcgen.LockRemovalIntentForMaintenanceParams{
+) (string, bool, error) {
+	row, err := u.queries.LockRemovalIntentForMaintenance(ctx, sqlcgen.LockRemovalIntentForMaintenanceParams{
 		OrganizationID: organizationID,
 		MembershipID:   membershipID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return "", false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return "", false, err
+	}
+	return row.Status, true, nil
 }
 
 func (u *maintenanceUnitOfWork) MarkMembershipDeleted(
