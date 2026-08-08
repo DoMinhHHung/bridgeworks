@@ -28,7 +28,7 @@ type Repository interface {
 
 type UnitOfWork interface {
 	AcquireOrganizationLock(context.Context, uuid.UUID) error
-	LockRemovalIntent(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+	LockRemovalIntent(context.Context, uuid.UUID, uuid.UUID) (string, bool, error)
 	MarkMembershipDeleted(context.Context, uuid.UUID, uuid.UUID) error
 	DeleteRemovalIntent(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 	InsertAuditEvent(context.Context, organizationaudit.Event) error
@@ -130,13 +130,27 @@ func (s *Service) finalizeAbsentMembership(
 	if err := uow.AcquireOrganizationLock(ctx, candidate.OrganizationID); err != nil {
 		return false, safeerr.Wrap("lock organization for removal reconciliation", err)
 	}
-	found, err := uow.LockRemovalIntent(ctx, candidate.OrganizationID, candidate.MembershipID)
+	membershipStatus, found, err := uow.LockRemovalIntent(ctx, candidate.OrganizationID, candidate.MembershipID)
 	if err != nil {
 		return false, safeerr.Wrap("lock removal intent for reconciliation", err)
 	}
 	if !found {
 		if err := uow.Commit(ctx); err != nil {
 			return false, safeerr.Wrap("commit already reconciled removal", err)
+		}
+		committed = true
+		return false, nil
+	}
+	if membershipStatus != "active" {
+		deleted, err := uow.DeleteRemovalIntent(ctx, candidate.OrganizationID, candidate.MembershipID)
+		if err != nil {
+			return false, safeerr.Wrap("clear stale removal intent", err)
+		}
+		if !deleted {
+			return false, errors.New("removal reconciliation lost locked stale intent")
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return false, safeerr.Wrap("commit stale removal intent cleanup", err)
 		}
 		committed = true
 		return false, nil
