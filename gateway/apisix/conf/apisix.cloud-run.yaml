@@ -1,3 +1,42 @@
+upstreams:
+  - id: identity-cloud-run
+    name: identity-cloud-run
+    type: roundrobin
+    scheme: https
+    pass_host: node
+    retries: 0
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    keepalive_pool:
+      size: 64
+      idle_timeout: 60
+      requests: 1000
+    nodes:
+      - host: "${{IDENTITY_SERVICE_HOST}}"
+        port: 443
+        weight: 1
+
+  - id: organization-cloud-run
+    name: organization-cloud-run
+    type: roundrobin
+    scheme: https
+    pass_host: node
+    retries: 0
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    keepalive_pool:
+      size: 64
+      idle_timeout: 60
+      requests: 1000
+    nodes:
+      - host: "${{ORGANIZATION_SERVICE_HOST}}"
+        port: 443
+        weight: 1
+
 routes:
   - id: bridgeworks-gateway-health
     name: bridgeworks-gateway-health
@@ -22,13 +61,14 @@ routes:
     name: bridgeworks-identity-live
     uri: /api/v1/identity/health/live
     methods: [GET]
-    upstream_id: identity-runtime
+    upstream_id: identity-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
-      # BRIDGEWORKS_IDENTITY_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /health/live
 
@@ -36,13 +76,14 @@ routes:
     name: bridgeworks-identity-ready
     uri: /api/v1/identity/health/ready
     methods: [GET]
-    upstream_id: identity-runtime
+    upstream_id: identity-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
-      # BRIDGEWORKS_IDENTITY_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /health/ready
 
@@ -50,13 +91,14 @@ routes:
     name: bridgeworks-identity-clerk-webhook
     uri: /api/v1/identity/webhooks/clerk
     methods: [POST]
-    upstream_id: identity-runtime
+    upstream_id: identity-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
-      # BRIDGEWORKS_IDENTITY_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /webhooks/clerk
 
@@ -64,7 +106,7 @@ routes:
     name: bridgeworks-identity-me
     uri: /api/v1/me
     methods: [GET, OPTIONS]
-    upstream_id: identity-runtime
+    upstream_id: identity-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -77,7 +119,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_IDENTITY_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /me
 
@@ -85,13 +128,14 @@ routes:
     name: bridgeworks-organization-live
     uri: /api/v1/organizations/health/live
     methods: [GET]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /health/live
 
@@ -99,13 +143,14 @@ routes:
     name: bridgeworks-organization-ready
     uri: /api/v1/organizations/health/ready
     methods: [GET]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /health/ready
 
@@ -113,13 +158,14 @@ routes:
     name: bridgeworks-organization-clerk-webhook
     uri: /api/v1/organizations/webhooks/clerk
     methods: [POST]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
         include_in_response: true
         algorithm: uuid
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /webhooks/clerk
 
@@ -127,7 +173,7 @@ routes:
     name: bridgeworks-organization-current
     uri: /api/v1/organizations/current
     methods: [GET, PATCH, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -140,7 +186,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current
 
@@ -148,7 +195,7 @@ routes:
     name: bridgeworks-organization-current-verification
     uri: /api/v1/organizations/current/verification
     methods: [POST, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -161,7 +208,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current/verification
 
@@ -169,7 +217,7 @@ routes:
     name: bridgeworks-organization-current-business-email-verification
     uri: /api/v1/organizations/current/business-email-verification
     methods: [POST, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -182,7 +230,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current/business-email-verification
 
@@ -190,7 +239,7 @@ routes:
     name: bridgeworks-organization-current-invitations
     uri: /api/v1/organizations/current/invitations
     methods: [POST, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -203,7 +252,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current/invitations
 
@@ -211,7 +261,7 @@ routes:
     name: bridgeworks-organization-current-audit-events
     uri: /api/v1/organizations/current/audit-events
     methods: [GET, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -224,7 +274,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current/audit-events
 
@@ -232,7 +283,7 @@ routes:
     name: bridgeworks-organization-current-membership
     uri: /api/v1/organizations/current/membership
     methods: [GET, DELETE, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -245,7 +296,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         uri: /organizations/current/membership
 
@@ -253,7 +305,7 @@ routes:
     name: bridgeworks-organization-current-member-role
     uri: /api/v1/organizations/current/members/*/role
     methods: [PATCH, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -266,7 +318,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         regex_uri: ["^/api/v1/organizations/current/members/(.*)/role$", "/organizations/current/members/$1/role"]
 
@@ -274,7 +327,7 @@ routes:
     name: bridgeworks-organization-current-member-remove
     uri: /api/v1/organizations/current/members/*
     methods: [DELETE, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -287,7 +340,8 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         regex_uri: ["^/api/v1/organizations/current/members/(.*)$", "/organizations/current/members/$1"]
 
@@ -295,49 +349,7 @@ routes:
     name: bridgeworks-organization-current-ownership-transfer
     uri: /api/v1/organizations/current/ownership-transfer
     methods: [POST, OPTIONS]
-    upstream_id: organization-runtime
-    plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
-        cors:
-        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
-        allow_methods: POST,OPTIONS
-        allow_headers: Authorization,Content-Type,X-Request-Id
-        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
-        max_age: 600
-        allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
-      proxy-rewrite:
-        uri: /organizations/current/ownership-transfer
-      
-  - id: bridgeworks-platform-organization-verification-queue
-    name: bridgeworks-platform-organization-verification-queue
-    uri: /api/v1/platform/organizations/verification-queue
-    methods: [GET, OPTIONS]
-    upstream_id: organization-runtime
-    plugins:
-      request-id:
-        header_name: X-Request-Id
-        include_in_response: true
-        algorithm: uuid
-        cors:
-        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
-        allow_methods: GET,OPTIONS
-        allow_headers: Authorization,Content-Type,X-Request-Id
-        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
-        max_age: 600
-        allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
-      proxy-rewrite:
-        uri: /platform/organizations/verification-queue
-
-  - id: bridgeworks-platform-organization-verification-decision
-    name: bridgeworks-platform-organization-verification-decision
-    uri: /api/v1/platform/organizations/*/verification-decisions
-    methods: [POST, OPTIONS]
-    upstream_id: organization-runtime
+    upstream_id: organization-cloud-run
     plugins:
       request-id:
         header_name: X-Request-Id
@@ -350,7 +362,52 @@ routes:
         expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
         max_age: 600
         allow_credential: false
-      # BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /organizations/current/ownership-transfer
+
+  - id: bridgeworks-platform-organization-verification-queue
+    name: bridgeworks-platform-organization-verification-queue
+    uri: /api/v1/platform/organizations/verification-queue
+    methods: [GET, OPTIONS]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: GET,OPTIONS
+        allow_headers: Authorization,Content-Type,X-Request-Id
+        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
+        max_age: 600
+        allow_credential: false
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
+      proxy-rewrite:
+        uri: /platform/organizations/verification-queue
+
+  - id: bridgeworks-platform-organization-verification-decision
+    name: bridgeworks-platform-organization-verification-decision
+    uri: /api/v1/platform/organizations/*/verification-decisions
+    methods: [POST, OPTIONS]
+    upstream_id: organization-cloud-run
+    plugins:
+      request-id:
+        header_name: X-Request-Id
+        include_in_response: true
+        algorithm: uuid
+      cors:
+        allow_origins: "${{CLERK_AUTHORIZED_PARTIES}}"
+        allow_methods: POST,OPTIONS
+        allow_headers: Authorization,Content-Type,X-Request-Id
+        expose_headers: X-Request-Id,Retry-After,WWW-Authenticate
+        max_age: 600
+        allow_credential: false
+      google-cloud-run-auth:
+        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
       proxy-rewrite:
         regex_uri: ["^/api/v1/platform/organizations/(.*)/verification-decisions$", "/platform/organizations/$1/verification-decisions"]
 #END

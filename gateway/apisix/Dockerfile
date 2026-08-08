@@ -7,9 +7,7 @@ USER root
 
 COPY --chown=apisix:0 conf/config.cloud-run.yaml /usr/local/apisix/bridgeworks/conf/config.cloud-run.yaml
 COPY --chown=apisix:0 conf/config.render.yaml /usr/local/apisix/bridgeworks/conf/config.render.yaml
-COPY --chown=apisix:0 conf/upstreams.cloud-run.yaml /usr/local/apisix/bridgeworks/conf/upstreams.cloud-run.yaml
-COPY --chown=apisix:0 conf/upstreams.render.yaml /usr/local/apisix/bridgeworks/conf/upstreams.render.yaml
-COPY --chown=apisix:0 conf/routes.runtime.yaml /usr/local/apisix/bridgeworks/conf/routes.runtime.yaml
+COPY --chown=apisix:0 conf/apisix.cloud-run.yaml /usr/local/apisix/bridgeworks/conf/apisix.cloud-run.yaml
 COPY --chown=apisix:0 custom/ /usr/local/apisix/custom/
 COPY --chown=apisix:0 scripts/runtime-config.sh /usr/local/bin/bridgeworks-apisix-runtime-config
 COPY --chown=apisix:0 scripts/runtime-entrypoint.sh /usr/local/bin/bridgeworks-apisix-entrypoint

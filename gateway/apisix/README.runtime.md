@@ -15,7 +15,7 @@ RUNTIME_TARGET=cloud-run
 
 Missing or unknown targets fail startup. Both platforms must configure the APISIX container port as `9080`; a different `PORT` fails startup.
 
-The public route surface is maintained once in `conf/routes.runtime.yaml`. Runtime generation combines that shared route file with a small target-specific upstream profile. Cloud Run generation injects `google-cloud-run-auth` on private-service routes; Render generation never injects or registers that plugin.
+`conf/apisix.cloud-run.yaml` remains the single canonical public route surface. Cloud Run uses it unchanged. Render derives its runtime APISIX profile from that same file by changing only private upstream identifiers/transport settings and removing the `google-cloud-run-auth` blocks. Automated parity validation compares the generated route IDs, methods, external URIs, and proxy rewrites between both modes.
 
 ## Render staging
 

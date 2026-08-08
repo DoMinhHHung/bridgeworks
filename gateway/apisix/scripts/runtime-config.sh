@@ -80,32 +80,60 @@ validate_port() {
     fail "$variable_name must be between 1 and 65535"
 }
 
-write_routes() {
-  target="$1"
-  routes_file="$2"
-  output_file="$3"
+render_apisix_profile() {
+  input_file="$1"
+  output_file="$2"
 
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      *'# BRIDGEWORKS_IDENTITY_UPSTREAM_AUTH')
-        if [ "$target" = "cloud-run" ]; then
-          cat >> "$output_file" <<'AUTH'
-      google-cloud-run-auth:
-        audience: "${{IDENTITY_SERVICE_AUDIENCE}}"
-AUTH
-        fi
-        ;;
-      *'# BRIDGEWORKS_ORGANIZATION_UPSTREAM_AUTH')
-        if [ "$target" = "cloud-run" ]; then
-          cat >> "$output_file" <<'AUTH'
-      google-cloud-run-auth:
-        audience: "${{ORGANIZATION_SERVICE_AUDIENCE}}"
-AUTH
-        fi
-        ;;
-      *) printf '%s\n' "$line" >> "$output_file" ;;
-    esac
-  done < "$routes_file"
+  awk '
+    BEGIN { upstream = "" }
+
+    /^  - id: identity-cloud-run$/ {
+      upstream = "identity"
+      sub(/identity-cloud-run/, "identity-runtime")
+    }
+    /^  - id: organization-cloud-run$/ {
+      upstream = "organization"
+      sub(/organization-cloud-run/, "organization-runtime")
+    }
+    /^routes:$/ { upstream = "" }
+
+    upstream == "identity" && /^    name: identity-cloud-run$/ {
+      sub(/identity-cloud-run/, "identity-runtime")
+    }
+    upstream == "organization" && /^    name: organization-cloud-run$/ {
+      sub(/organization-cloud-run/, "organization-runtime")
+    }
+    upstream == "identity" && /^    scheme: https$/ {
+      print "    scheme: \"${{IDENTITY_SERVICE_SCHEME}}\""
+      next
+    }
+    upstream == "organization" && /^    scheme: https$/ {
+      print "    scheme: \"${{ORGANIZATION_SERVICE_SCHEME}}\""
+      next
+    }
+    upstream == "identity" && /^        port: 443$/ {
+      print "        port: ${{IDENTITY_SERVICE_PORT}}"
+      next
+    }
+    upstream == "organization" && /^        port: 443$/ {
+      print "        port: ${{ORGANIZATION_SERVICE_PORT}}"
+      next
+    }
+
+    /^      google-cloud-run-auth:$/ {
+      if ((getline next_line) <= 0 || next_line !~ /^        audience: /) {
+        print "bridgeworks-apisix: malformed Cloud Run auth block" > "/dev/stderr"
+        exit 2
+      }
+      next
+    }
+
+    {
+      gsub(/identity-cloud-run/, "identity-runtime")
+      gsub(/organization-cloud-run/, "organization-runtime")
+      print
+    }
+  ' "$input_file" > "$output_file" || fail "failed to generate Render APISIX profile"
 }
 
 main() {
@@ -114,6 +142,7 @@ main() {
   target="$1"
   profile_dir="$2"
   output_dir="$3"
+  canonical_apisix="$profile_dir/apisix.cloud-run.yaml"
 
   require_non_empty RUNTIME_TARGET "$target"
   require_non_empty CLERK_AUTHORIZED_PARTIES "${CLERK_AUTHORIZED_PARTIES:-}"
@@ -139,13 +168,13 @@ main() {
   [ -d "$profile_dir" ] || fail "runtime profile directory does not exist"
   [ -d "$output_dir" ] || fail "APISIX output directory does not exist"
   [ -r "$profile_dir/config.$target.yaml" ] || fail "runtime config profile is missing for $target"
-  [ -r "$profile_dir/upstreams.$target.yaml" ] || fail "runtime upstream profile is missing for $target"
-  [ -r "$profile_dir/routes.runtime.yaml" ] || fail "shared runtime routes are missing"
+  [ -r "$canonical_apisix" ] || fail "canonical APISIX profile is missing"
 
   cat "$profile_dir/config.$target.yaml" > "$output_dir/config.yaml"
-  cat "$profile_dir/upstreams.$target.yaml" > "$output_dir/apisix.yaml"
-  printf '\n' >> "$output_dir/apisix.yaml"
-  write_routes "$target" "$profile_dir/routes.runtime.yaml" "$output_dir/apisix.yaml"
+  case "$target" in
+    cloud-run) cat "$canonical_apisix" > "$output_dir/apisix.yaml" ;;
+    render) render_apisix_profile "$canonical_apisix" "$output_dir/apisix.yaml" ;;
+  esac
 }
 
 main "$@"

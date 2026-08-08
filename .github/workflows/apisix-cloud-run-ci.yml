@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           ! grep -R --line-number --fixed-strings '/internal/v1/platform-access/me' \
             gateway/apisix/conf/apisix.yaml \
-            gateway/apisix/conf/routes.runtime.yaml
+            gateway/apisix/conf/apisix.cloud-run.yaml
 
       - name: Validate APISIX runtime portability
         shell: bash
