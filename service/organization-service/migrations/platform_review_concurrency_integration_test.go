@@ -148,22 +148,33 @@ func TestPlatformReviewConcurrencyAndAuditAtomicity(t *testing.T) {
 		assertMembershipRoleAndAuditCount(t, ctx, pool, organizationID, targetMembershipID, "recruiter", 1)
 	})
 
-	t.Run("failed ownership transfer has no transfer audit", func(t *testing.T) {
+	t.Run("ownership transfer audit failure rolls all role mutations back", func(t *testing.T) {
 		organizationID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000dc")
 		ownerMembershipID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000dd")
 		targetMembershipID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000de")
+		identityID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000df")
 		seedMembershipAuditOrganization(t, ctx, pool, organizationID, ownerMembershipID, targetMembershipID)
-		actor := authorization.NewActorContext(uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000df"), organizationID, ownerMembershipID, "owner", nil)
+		actor := authorization.NewActorContext(identityID, organizationID, ownerMembershipID, "owner", nil)
+		service := membershipadmin.New(repository, nil, nil)
+
+		installAuditFailureTrigger(t, ctx, pool)
+		if err := service.TransferOwnership(ctx, actor, targetMembershipID); err == nil {
+			t.Fatal("ownership transfer unexpectedly succeeded with failing audit insert")
+		}
+		dropAuditFailureTrigger(t, ctx, pool)
+		assertOwnershipTransferState(t, ctx, pool, organizationID, ownerMembershipID, targetMembershipID, "owner", "viewer", 0)
+	})
+
+	t.Run("invalid ownership transfer has no transfer audit", func(t *testing.T) {
+		organizationID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000e0")
+		ownerMembershipID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000e1")
+		targetMembershipID := uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000e2")
+		seedMembershipAuditOrganization(t, ctx, pool, organizationID, ownerMembershipID, targetMembershipID)
+		actor := authorization.NewActorContext(uuid.MustParse("018f0c76-8f6c-7cc4-8000-0000000000e3"), organizationID, ownerMembershipID, "owner", nil)
 		if err := membershipadmin.New(repository, nil, nil).TransferOwnership(ctx, actor, ownerMembershipID); !errors.Is(err, membershipadmin.ErrInvalidTransferTarget) {
 			t.Fatalf("TransferOwnership() error = %v", err)
 		}
-		var count int
-		if err := pool.QueryRow(ctx, `select count(*) from organization.audit_events where organization_id=$1 and event_type='organization.ownership.transferred'`, organizationID).Scan(&count); err != nil {
-			t.Fatal(err)
-		}
-		if count != 0 {
-			t.Fatalf("failed transfer audit count=%d, want 0", count)
-		}
+		assertOwnershipTransferState(t, ctx, pool, organizationID, ownerMembershipID, targetMembershipID, "owner", "viewer", 0)
 	})
 }
 
@@ -226,15 +237,38 @@ func seedMembershipAuditOrganization(
 	targetMembershipID uuid.UUID,
 ) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-		insert into organization.organizations (id, clerk_organization_id, name, status) values ($1,$2,'Membership Audit','active');
-		insert into organization.memberships (id, clerk_membership_id, organization_id, clerk_user_id, application_role, status)
-		values ($3,$4,$1,'user-owner','owner','active');
-		insert into organization.memberships (id, clerk_membership_id, organization_id, clerk_user_id, application_role, status)
-		values ($5,$6,$1,'user-target','viewer','active');
-	`, organizationID, "org-membership-audit-"+organizationID.String(), ownerMembershipID, "mem-owner-"+ownerMembershipID.String(), targetMembershipID, "mem-target-"+targetMembershipID.String()); err != nil {
-		t.Fatal(err)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin membership audit fixture transaction: %v", err)
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	if _, err := tx.Exec(ctx, `
+		insert into organization.organizations (id, clerk_organization_id, name, status)
+		values ($1, $2, 'Membership Audit', 'active')
+	`, organizationID, "org-membership-audit-"+organizationID.String()); err != nil {
+		t.Fatalf("insert membership audit organization: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into organization.memberships (id, clerk_membership_id, organization_id, clerk_user_id, application_role, status)
+		values ($1, $2, $3, 'user-owner', 'owner', 'active')
+	`, ownerMembershipID, "mem-owner-"+ownerMembershipID.String(), organizationID); err != nil {
+		t.Fatalf("insert membership audit owner: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		insert into organization.memberships (id, clerk_membership_id, organization_id, clerk_user_id, application_role, status)
+		values ($1, $2, $3, 'user-target', 'viewer', 'active')
+	`, targetMembershipID, "mem-target-"+targetMembershipID.String(), organizationID); err != nil {
+		t.Fatalf("insert membership audit target: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit membership audit fixture: %v", err)
+	}
+	committed = true
 }
 
 func assertMembershipRoleAndAuditCount(
@@ -257,5 +291,33 @@ func assertMembershipRoleAndAuditCount(
 	}
 	if role != wantRole || auditCount != wantAudit {
 		t.Fatalf("role/audit=%q/%d, want %q/%d", role, auditCount, wantRole, wantAudit)
+	}
+}
+
+func assertOwnershipTransferState(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	organizationID uuid.UUID,
+	ownerMembershipID uuid.UUID,
+	targetMembershipID uuid.UUID,
+	wantOwnerRole string,
+	wantTargetRole string,
+	wantAudit int,
+) {
+	t.Helper()
+	var ownerRole, targetRole string
+	var auditCount int
+	if err := pool.QueryRow(ctx, "select application_role from organization.memberships where id=$1", ownerMembershipID).Scan(&ownerRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, "select application_role from organization.memberships where id=$1", targetMembershipID).Scan(&targetRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `select count(*) from organization.audit_events where organization_id=$1 and event_type='organization.ownership.transferred'`, organizationID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if ownerRole != wantOwnerRole || targetRole != wantTargetRole || auditCount != wantAudit {
+		t.Fatalf("owner/target/audit=%q/%q/%d, want %q/%q/%d", ownerRole, targetRole, auditCount, wantOwnerRole, wantTargetRole, wantAudit)
 	}
 }
