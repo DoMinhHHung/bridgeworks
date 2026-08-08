@@ -202,6 +202,7 @@ assert body['permissions']==[
     'membership.manage',
     'membership.read',
     'membership.role.manage',
+    'organization.audit.read',
     'organization.manage',
     'organization.read',
     'organization.verify.request',
