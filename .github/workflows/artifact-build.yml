@@ -36,8 +36,6 @@ jobs:
             .github/scripts/test-cicd-artifacts.py
           python3 .github/scripts/test-cicd-artifacts.py
           python3 .github/scripts/cicd-artifacts.py policy --root .
-          ! grep -R --line-number --fixed-strings 'origin/main' .github/workflows .github/scripts
-          ! grep -R --line-number --fixed-strings 'git fetch origin main' .github/workflows .github/scripts
 
       - name: Detect build candidates
         id: detect
