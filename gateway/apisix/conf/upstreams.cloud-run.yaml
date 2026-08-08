@@ -1,0 +1,38 @@
+upstreams:
+  - id: identity-runtime
+    name: identity-runtime
+    type: roundrobin
+    scheme: https
+    pass_host: node
+    retries: 0
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    keepalive_pool:
+      size: 64
+      idle_timeout: 60
+      requests: 1000
+    nodes:
+      - host: "${{IDENTITY_SERVICE_HOST}}"
+        port: 443
+        weight: 1
+
+  - id: organization-runtime
+    name: organization-runtime
+    type: roundrobin
+    scheme: https
+    pass_host: node
+    retries: 0
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    keepalive_pool:
+      size: 64
+      idle_timeout: 60
+      requests: 1000
+    nodes:
+      - host: "${{ORGANIZATION_SERVICE_HOST}}"
+        port: 443
+        weight: 1
