@@ -44,6 +44,7 @@ func (f *fakePresenceProvider) MembershipExists(context.Context, string, string)
 
 type fakeMaintenanceUOW struct {
 	found     bool
+	status    string
 	marked    int
 	deleted   bool
 	audits    []organizationaudit.Event
@@ -56,9 +57,13 @@ func (u *fakeMaintenanceUOW) AcquireOrganizationLock(context.Context, uuid.UUID)
 	u.sequence = append(u.sequence, "lock")
 	return nil
 }
-func (u *fakeMaintenanceUOW) LockRemovalIntent(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+func (u *fakeMaintenanceUOW) LockRemovalIntent(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
 	u.sequence = append(u.sequence, "lock_intent")
-	return u.found, nil
+	status := u.status
+	if status == "" {
+		status = "active"
+	}
+	return status, u.found, nil
 }
 func (u *fakeMaintenanceUOW) MarkMembershipDeleted(context.Context, uuid.UUID, uuid.UUID) error {
 	u.sequence = append(u.sequence, "mark_deleted")
@@ -153,6 +158,27 @@ func TestAlreadyReconciledRemovalIsIdempotent(t *testing.T) {
 	}
 	if result.Finalized != 0 || uow.marked != 0 || len(uow.audits) != 0 || uow.commits != 1 {
 		t.Fatalf("result=%#v uow=%#v", result, uow)
+	}
+}
+
+func TestStaleCandidateWithDeletedMembershipDoesNotFabricateCompletionAudit(t *testing.T) {
+	uow := &fakeMaintenanceUOW{found: true, status: "deleted", deleted: true}
+	repo := &fakeMaintenanceRepository{candidates: []RemovalCandidate{removalCandidate()}, uow: uow}
+	result, err := New(repo, &fakePresenceProvider{exists: false}).ReconcileRemovals(context.Background(), time.Minute, 10, time.Now())
+	if err != nil {
+		t.Fatalf("ReconcileRemovals() error = %v", err)
+	}
+	if result.Finalized != 0 || uow.marked != 0 || len(uow.audits) != 0 || uow.commits != 1 {
+		t.Fatalf("stale candidate result=%#v uow=%#v", result, uow)
+	}
+	want := []string{"lock", "lock_intent", "delete_intent", "commit"}
+	if len(uow.sequence) != len(want) {
+		t.Fatalf("stale candidate sequence=%v, want %v", uow.sequence, want)
+	}
+	for i := range want {
+		if uow.sequence[i] != want[i] {
+			t.Fatalf("stale candidate sequence=%v, want %v", uow.sequence, want)
+		}
 	}
 }
 
